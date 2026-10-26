@@ -837,6 +837,9 @@
         }
 
         syncBoardFrame();
+
+        // 小窗跟着视口一起更新（独立的 DOM canvas，不进主画布像素）
+        drawMinimap();
     }
 
     /* =========================================================
@@ -928,6 +931,388 @@
     }
 
     let sizeDrag = null;
+
+    /* =========================================================
+     * 4c. 左下角小窗导航（minimap）
+     *
+     * 无限画布最大的问题是"用户跑丢了"——平移出去就不知道图在哪。
+     * 小窗把整个世界压成一张缩略图：
+     *   - 每个区域一块色块 + 编号（当前区域画真实缩略图）
+     *   - 一个视口框，标出当前正在看哪一块
+     *   - 点/拖小窗可以跳到任意位置
+     *
+     * 独立的 DOM canvas，不画进主画布：
+     * 主画布的像素要留给回归对比，混进去就把基线搅脏了。
+     *
+     * 小窗自己的坐标系：左上角为原点，w/h 是 CSS 像素尺寸。
+     * 跟世界坐标的换算靠 miniMap.s（格→小窗像素）+ miniMap.ox/oy（偏移）。
+     * ========================================================= */
+
+    const MINI_PAD = 4;             // 小窗内边距
+
+    const miniMap = {
+        canvas: null,
+        ctx: null,
+        w: 0, h: 0, dpr: 1,
+        s: 1,                          // 小窗像素 / 世界格
+        ox: 0, oy: 0,                  // 世界坐标 → 小窗坐标的偏移
+        bounds: null,                  // 本次用的世界范围
+        drag: null                     // 拖动跳转中
+    };
+
+    // 每个区域的缩略图缓存：区域 id → { canvas, ver }
+    // ver 是区域内容的版本号，内容没变就不重画（省 CPU）
+    const miniThumbs = new Map();
+
+    function miniSetup() {
+        const cv = $('minimapCanvas');
+        if (!cv) return;
+        miniMap.canvas = cv;
+        miniMap.ctx = cv.getContext('2d');
+
+        const resize = () => {
+            const dpr = Math.min(2, window.devicePixelRatio || 1);
+            const w = cv.clientWidth || 152;
+            const h = cv.clientHeight || 66;
+            if (cv.width === Math.round(w * dpr) && cv.height === Math.round(h * dpr)) return;
+            cv.width = Math.round(w * dpr);
+            cv.height = Math.round(h * dpr);
+            miniMap.w = w;
+            miniMap.h = h;
+            miniMap.dpr = dpr;
+            miniMap.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            // 尺寸变了，缩略图缓存里的画布尺寸也不对
+            miniThumbs.clear();
+            drawMinimap();
+        };
+
+        // 小窗自己吃掉指针事件，别让画布那边以为在画画
+        cv.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            miniMap.drag = { sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y };
+            cv.setPointerCapture(e.pointerId);
+            miniJumpTo(e);
+        });
+
+        cv.addEventListener('pointermove', (e) => {
+            if (!miniMap.drag) return;
+            e.preventDefault();
+            miniJumpTo(e);
+        });
+
+        const endMini = (e) => {
+            if (!miniMap.drag) return;
+            miniMap.drag = null;
+            try { cv.releasePointerCapture(e.pointerId); } catch (_) { }
+        };
+        cv.addEventListener('pointerup', endMini);
+        cv.addEventListener('pointercancel', endMini);
+
+        resize();
+        new ResizeObserver(resize).observe(cv);
+        window.addEventListener('resize', resize);
+    }
+
+    /**
+     * 小窗点/拖 → 把视口挪到对应的世界位置。
+     *
+     * 落在小窗外面（越界箭头那块）时，钳到边缘：这时候用户的意思是
+     * "往那个方向走"，不是"精确到那一格"。
+     */
+    function miniJumpTo(e) {
+        const b = miniMap.bounds;
+        if (!b) return;
+        const rect = miniMap.canvas.getBoundingClientRect();
+        const px = e.clientX - rect.left;
+        const py = e.clientY - rect.top;
+
+        // 小窗像素 → 世界坐标
+        const wx = (px - miniMap.ox) / miniMap.s;
+        const wy = (py - miniMap.oy) / miniMap.s;
+
+        miniJumpToWorld(wx, wy);
+    }
+
+    /**
+     * 把视口挪到指定的世界坐标（让该点落在视口中心）。
+     *
+     * 落在区域并集外面时，钳到最近的边缘：这时候用户的意思是
+     * "往那个方向走"，不是"精确到那一格"。
+     */
+    function miniJumpToWorld(wx, wy) {
+        const b = miniMap.bounds;
+        if (!b) return;
+
+        // 点在区域外：钳到最近的区域边缘，别跳到虚空里
+        wx = clamp(wx, b.x0 - 2, b.x1 + 2);
+        wy = clamp(wy, b.y0 - 2, b.y1 + 2);
+
+        // 让点击处落在视口中心
+        const vpW = vp.clientWidth;
+        const vpH = vp.clientHeight;
+        view.x = vpW / 2 - wx * view.scale;
+        view.y = vpH / 2 - wy * view.scale;
+        requestRender();
+    }
+
+    /**
+     * 算小窗的映射：世界范围 → 小窗像素。
+     *
+     * 关键：范围**只按区域并集算**，不把当前视口算进去。
+     *
+     * 这是最初就定下的口径：无限画布最大的坑是"用户跑丢了"，
+     * 小窗存在的意义就是恒定地告诉用户"图纸都在这儿"。
+     * 一旦把视口也塞进范围，用户拖得越远，区域在小窗里就越小——
+     * 正好在最需要它的时候失效。
+     *
+     * 视口跑出范围怎么办？钳到边缘 + 在小窗边上画个三角箭头指方向。
+     */
+    function miniComputeBounds() {
+        const b = worldBounds();
+        if (!b) return null;
+
+        // 范围 = 区域并集（不掺视口）
+        const x0 = b.x0, y0 = b.y0, x1 = b.x1, y1 = b.y1;
+
+        // 视口的世界范围（看得见的那一块）——只用来画视口框和箭头
+        const vpW = vp.clientWidth / view.scale;
+        const vpH = vp.clientHeight / view.scale;
+        const viewW = {
+            x0: -view.x / view.scale, y0: -view.y / view.scale,
+            x1: (-view.x) / view.scale + vpW, y1: (-view.y) / view.scale + vpH
+        };
+
+        const w = Math.max(1, x1 - x0);
+        const h = Math.max(1, y1 - y0);
+
+        const availW = miniMap.w - MINI_PAD * 2;
+        const availH = miniMap.h - MINI_PAD * 2;
+        const s = Math.min(availW / w, availH / h);
+
+        // 居中
+        const ox = MINI_PAD + (availW - w * s) / 2 - x0 * s;
+        const oy = MINI_PAD + (availH - h * s) / 2 - y0 * s;
+
+        return { x0, y0, x1, y1, s, ox, oy, region: b, view: viewW };
+    }
+
+    /**
+     * 区域缩略图：把区域内容画成一张小图。
+     *
+     * 只有当前区域要真实缩略图（用户得看清自己在画哪块），
+     * 其他区域只画色块 + 编号。
+     */
+    function miniThumb(r) {
+        const ver = regionVersion(r);
+        const hit = miniThumbs.get(r.id);
+        if (hit && hit.ver === ver) return hit.canvas;
+
+        const TW = 64, TH = 64;
+        const cv = document.createElement('canvas');
+        cv.width = TW;
+        cv.height = TH;
+        const g = cv.getContext('2d');
+
+        // 区域按比例缩进缩略图
+        const cell = Math.min(TW / Math.max(1, r.w), TH / Math.max(1, r.h));
+        const dw = r.w * cell;
+        const dh = r.h * cell;
+        const ox = (TW - dw) / 2;
+        const oy = (TH - dh) / 2;
+
+        g.fillStyle = '#ffffff';
+        g.fillRect(0, 0, TW, TH);
+        for (let y = 0; y < r.h; y++) {
+            for (let x = 0; x < r.w; x++) {
+                const code = r.cells[y * r.w + x];
+                if (!code) continue;
+                const p = PAL_MAP.get(code);
+                if (!p) continue;
+                g.fillStyle = p.hex;
+                g.fillRect(ox + x * cell, oy + y * cell, Math.ceil(cell), Math.ceil(cell));
+            }
+        }
+
+        miniThumbs.set(r.id, { ver, canvas: cv });
+        return cv;
+    }
+
+    // 区域内容版本号：cells 数组引用变了就说明重画过
+    function regionVersion(r) {
+        if (!r._ver) r._ver = { cells: r.cells, n: 0 };
+        if (r._ver.cells !== r.cells) {
+            r._ver.cells = r.cells;
+            r._ver.n++;
+        }
+        return r._ver.n;
+    }
+
+    function drawMinimap() {
+        const g = miniMap.ctx;
+        if (!g) return;
+
+        // 注意：这里不能叫 W / H —— 外层的 W 是"世界"（W.regions）。
+        const mw = miniMap.w, mh = miniMap.h;
+        g.clearRect(0, 0, mw, mh);
+
+        const b = miniComputeBounds();
+        miniMap.bounds = b;
+        if (!b) return;
+
+        miniMap.s = b.s;
+        miniMap.ox = b.ox;
+        miniMap.oy = b.oy;
+
+        const toX = (wx) => b.ox + wx * b.s;
+        const toY = (wy) => b.oy + wy * b.s;
+
+        // 网格底纹：让人知道这是个无限格子图
+        g.strokeStyle = 'rgba(255,255,255,.07)';
+        g.lineWidth = 1;
+        g.beginPath();
+        for (let wx = Math.ceil(b.x0); wx <= b.x1; wx += 5) {
+            const x = Math.round(toX(wx)) + .5;
+            g.moveTo(x, 0); g.lineTo(x, mh);
+        }
+        for (let wy = Math.ceil(b.y0); wy <= b.y1; wy += 5) {
+            const y = Math.round(toY(wy)) + .5;
+            g.moveTo(0, y); g.lineTo(mw, y);
+        }
+        g.stroke();
+
+        // 区域色块 + 编号
+        for (const r of W.regions) {
+            const x = toX(r.x);
+            const y = toY(r.y);
+            const w = Math.max(2, r.w * b.s);
+            const h = Math.max(2, r.h * b.s);
+
+            const isCur = r.id === D.id;
+            if (isCur) {
+                // 当前区域画真实缩略图
+                const th = miniThumb(r);
+                if (th) {
+                    g.save();
+                    g.beginPath();
+                    g.rect(x, y, w, h);
+                    g.clip();
+                    g.drawImage(th, x, y, w, h);
+                    g.restore();
+                }
+            } else {
+                g.fillStyle = r.color;
+                g.globalAlpha = .82;
+                g.fillRect(x, y, w, h);
+                g.globalAlpha = 1;
+            }
+
+            g.strokeStyle = isCur ? '#ffffff' : r.color;
+            g.lineWidth = isCur ? 1.6 : 1;
+            g.strokeRect(x + .5, y + .5, Math.max(1, w - 1), Math.max(1, h - 1));
+
+            // 编号：区域多了就缩小，但不低于 9px（再小就看不清了）
+            const fs = clamp(Math.floor(Math.min(w, h) * .5), 9, 12);
+            if (w >= 10 && h >= 10) {
+                g.font = `700 ${fs}px system-ui, -apple-system, sans-serif`;
+                g.textAlign = 'center';
+                g.textBaseline = 'middle';
+                // 深字 + 白描边：当前区域的缩略图底色是白的，白字等于看不见；
+                // 其他区域底色是彩色块，深字才压得住。白描边两边都保底。
+                g.lineWidth = 3;
+                g.lineJoin = 'round';
+                g.strokeStyle = 'rgba(255,255,255,.92)';
+                g.strokeText(String(r.id), x + w / 2, y + h / 2);
+                g.fillStyle = 'rgba(20,22,26,.92)';
+                g.fillText(String(r.id), x + w / 2, y + h / 2);
+            }
+        }
+
+        // ---- 视口框：钳到区域并集范围内 ----
+        const v = b.view;
+        const vx = toX(v.x0);
+        const vy = toY(v.y0);
+        const vw = (v.x1 - v.x0) * b.s;
+        const vh = (v.y1 - v.y0) * b.s;
+
+        // 区域并集在小窗里的矩形（范围就是它，所以框超出时钳到这里）
+        const bx0 = toX(b.x0), by0 = toY(b.y0);
+        const bx1 = toX(b.x1), by1 = toY(b.y1);
+
+        const cx = clamp(vx, bx0, bx1);
+        const cy = clamp(vy, by0, by1);
+        const cw = clamp(vx + vw, bx0, bx1) - cx;
+        const ch = clamp(vy + vh, by0, by1) - cy;
+
+        g.strokeStyle = '#ffffff';
+        g.lineWidth = 1.4;
+        if (cw > 2 && ch > 2) {
+            g.strokeRect(cx + .5, cy + .5, cw - 1, ch - 1);
+        } else {
+            // 完全在范围外：留一个 4px 的白点当"你在这边"的标记
+            g.fillStyle = '#ffffff';
+            g.fillRect(cx - 2, cy - 2, 4, 4);
+        }
+
+        // 视口跑出区域并集 → 小窗边上画箭头，指图纸那一侧
+        miniArrowIfOut(b, v);
+    }
+
+    /**
+     * 视口跑到区域并集外面时，在小窗边缘画一个三角箭头，
+     * 告诉用户"图纸在那个方向"——箭头指向**图纸**那一侧，不是视口自己那侧。
+     */
+    function miniArrowIfOut(b, v) {
+        const g = miniMap.ctx;
+        const mw = miniMap.w, mh = miniMap.h;
+
+        // 视口中心 vs 区域并集中心
+        const vcx = (v.x0 + v.x1) / 2;
+        const vcy = (v.y0 + v.y1) / 2;
+        const r = b.region;
+        const bcx = (r.x0 + r.x1) / 2;
+        const bcy = (r.y0 + r.y1) / 2;
+
+        // 判定用"视口中心"而不是整个视口矩形：
+        // 缩得很小时视口比图纸还大，矩形必然超出，但那不是"跑丢"。
+        // 真正的跑丢是"我盯着的地方根本没图纸"。
+        if (vcx >= r.x0 && vcx <= r.x1 && vcy >= r.y0 && vcy <= r.y1) return;
+
+        const dx = vcx - bcx;
+        const dy = vcy - bcy;
+
+        // 要回图纸，该往哪边走？dx>0 = 视口在图纸右边 → 往左走
+        let dir;
+        if (Math.abs(dx) > Math.abs(dy)) dir = dx > 0 ? 'left' : 'right';
+        else dir = dy > 0 ? 'up' : 'down';
+
+        // 箭头落在小窗边缘，指向 dir 那一侧
+        const m = 9;
+        let ax, ay, rot;
+        if (dir === 'left') { ax = m; ay = mh / 2; rot = Math.PI; }
+        else if (dir === 'right') { ax = mw - m; ay = mh / 2; rot = 0; }
+        else if (dir === 'up') { ax = mw / 2; ay = m; rot = -Math.PI / 2; }
+        else { ax = mw / 2; ay = mh - m; rot = Math.PI / 2; }
+
+        // 箭头颜色跟当前区域一致，一眼知道指的是哪块；描白边保证在暗底上看得见
+        const cur = currentRegion();
+        g.save();
+        g.translate(ax, ay);
+        g.rotate(rot);
+        g.beginPath();
+        g.moveTo(6, 0);
+        g.lineTo(-3, -4.5);
+        g.lineTo(-3, 4.5);
+        g.closePath();
+        g.fillStyle = cur ? cur.color : '#ffffff';
+        g.globalAlpha = .95;
+        g.fill();
+        g.globalAlpha = 1;
+        g.lineWidth = 1;
+        g.strokeStyle = 'rgba(255,255,255,.85)';
+        g.stroke();
+        g.restore();
+    }
 
     function boardHandleDown(e) {
         const side = e.currentTarget.dataset.side;
@@ -1678,6 +2063,7 @@
             }
         }
         D.grid = g;
+        syncRegionMeta();          // 换了新数组，得让区域跟上，否则 region.cells 指向旧数组
         snapshot(axis === 'h' ? '左右翻转' : '上下翻转');
         requestRender();
     }
@@ -2488,11 +2874,41 @@
         D.cols = nw;
         D.rows = nh;
         D.grid = g;
+        syncRegionMeta();          // 区域要跟着换尺寸和换数组
         state.select = null;
         snapshot(`画布收窄到 ${nw}×${nh}`);
         updateDocMeta();
         fitView();
         toast(`画布已收窄到 ${nw} × ${nh}`);
+    }
+
+    /**
+     * 把画布裁剪到当前选区。
+     *
+     * 和 trimBounds 一样会换新数组 + 改尺寸，所以必须 syncRegionMeta()，
+     * 否则 region.cells 停在旧数组上。
+     */
+    function cropToSel() {
+        if (!state.select) { toast('先选一块区域'); return; }
+        if (state.select.inverse) { toast('反选状态下不能裁剪'); return; }
+        const { c0, r0, c1, r1 } = state.select.sb;
+        const nw = c1 - c0 + 1;
+        const nh = r1 - r0 + 1;
+        const g = new Array(nw * nh).fill('');
+        for (let r = 0; r < nh; r++) {
+            for (let c = 0; c < nw; c++) {
+                g[r * nw + c] = D.grid[lidx(c + c0, r + r0)];
+            }
+        }
+        D.cols = nw;
+        D.rows = nh;
+        D.grid = g;
+        syncRegionMeta();          // 区域要跟着换尺寸和换数组
+        state.select = null;
+        snapshot(`裁剪到选区 ${nw}×${nh}`);
+        updateDocMeta();
+        fitView();
+        toast(`画布裁剪到 ${nw} × ${nh}`);
     }
 
     /* =========================================================
@@ -3788,24 +4204,7 @@
                 break;
             }
             case 'crop': {
-                if (s.inverse) { toast('反选状态下不能裁剪'); return; }
-                const { c0, r0, c1, r1 } = s.sb;
-                const nw = c1 - c0 + 1;
-                const nh = r1 - r0 + 1;
-                const g = new Array(nw * nh).fill('');
-                for (let r = 0; r < nh; r++) {
-                    for (let c = 0; c < nw; c++) {
-                        g[r * nw + c] = D.grid[lidx(c + c0, r + r0)];
-                    }
-                }
-                D.cols = nw;
-                D.rows = nh;
-                D.grid = g;
-                state.select = null;
-                snapshot(`裁剪到选区 ${nw}×${nh}`);
-                updateDocMeta();
-                fitView();
-                toast(`画布裁剪到 ${nw} × ${nh}`);
+                cropToSel();
                 break;
             }
             case 'none':
@@ -4971,6 +5370,10 @@
         fitView();
         updateZoomLabel();
 
+        // 左下角小窗：独立 DOM canvas，自带指针事件
+        miniSetup();
+        requestRender();
+
         snapshot('打开');
 
         // 侧栏 / 次面板的宽度动画期间，容器每帧都在变尺寸；等它稳定下来再重设
@@ -4998,6 +5401,8 @@
                 W, gidx, lidx, localOf, toLocal, regionAt, worldBounds, makeRegion, bindRegion, syncRegionMeta,
                 setCellWorld: (wc, wr, code) => setCell(wc, wr, code),
                 draftCount, serializeDrafts, loadDrafts,
+                miniMap, miniSetup, drawMinimap, miniComputeBounds, miniJumpTo, miniJumpToWorld,
+                flip, trimBounds, cropToSel,
                 render: () => requestRender(),
                 redraw: () => { fitView(); requestRender(); } };
         }

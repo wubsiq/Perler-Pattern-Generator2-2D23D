@@ -27,3 +27,6 @@ sample-server.js
 # 清理隔离区（历史遗留，勿入库）
 _trash*/
 _*隔离区*/
+
+# git 备份目录（别提交进仓库）
+.git.bak-*/

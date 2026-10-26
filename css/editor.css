@@ -317,6 +317,57 @@ body.editor {
     transform: translateY(0);
 }
 
+/* =========================================================
+ * 左下角小窗导航（minimap）
+ *
+ * 无限画布最大的问题是"用户跑丢了"——平移出去就不知道图在哪。
+ * 小窗把整个世界压成一张缩略图：
+ *   - 所有区域的色块 + 编号（当前区域画真实缩略图）
+ *   - 视口框，标出当前正在看哪一块
+ *   - 点/拖小窗可以跳到任意位置
+ *
+ * 独立的 DOM canvas，不画进主画布：主画布的像素要留给回归对比，
+ * 混进去就把基线搅脏了。
+ * ========================================================= */
+.ed-minimap {
+    position: absolute;
+    left: 14px;
+    bottom: 56px;
+    /* border-box：152×66 就是小窗的实际外框尺寸，canvas 自动填内容区 */
+    box-sizing: border-box;
+    width: 152px;
+    height: 66px;
+    z-index: 7;
+    border-radius: 10px;
+    overflow: hidden;
+    background: rgba(24, 26, 31, .84);
+    border: 1px solid rgba(255, 255, 255, .14);
+    box-shadow: 0 6px 18px rgba(20, 22, 26, .22);
+    cursor: pointer;
+    touch-action: none;
+    transition: left .22s var(--ease);
+}
+
+/* 侧栏展开时小窗跟着让开，别被工具名盖住 */
+.ed-tools.is-open + .ed-viewport .ed-minimap {
+    left: 92px;
+}
+
+.ed-minimap canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+/* 小窗太小了就别占地方了 */
+@media (max-width: 520px) {
+    .ed-minimap {
+        width: 108px;
+        height: 48px;
+        bottom: 50px;
+    }
+}
+
 /* HUD */
 .ed-hud {
     position: absolute;
