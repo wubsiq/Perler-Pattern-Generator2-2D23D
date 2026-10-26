@@ -1,0 +1,51 @@
+# Cloudflare Pages 缓存配置
+# 结合性能优化与安全策略
+
+# 全局安全头
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+
+# 带哈希的静态资源永久缓存（哈希变化即新版本）
+/*.min.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/*.min.css
+  Cache-Control: public, max-age=31536000, immutable
+
+# 图片资源缓存
+/*.png
+  Cache-Control: public, max-age=2592000, immutable
+
+/*.jpg
+  Cache-Control: public, max-age=2592000, immutable
+
+/*.jpeg
+  Cache-Control: public, max-age=2592000, immutable
+
+/*.gif
+  Cache-Control: public, max-age=2592000, immutable
+
+/*.webp
+  Cache-Control: public, max-age=2592000, immutable
+
+/*.svg
+  Cache-Control: public, max-age=2592000, immutable
+
+/*.ico
+  Cache-Control: public, max-age=2592000, immutable
+
+/*.json
+  Cache-Control: public, max-age=2592000, immutable
+
+/sample-patterns.json
+  Cache-Control: no-cache
+
+# HTML 文件不缓存，确保每次获取最新版本
+/*.html
+  Cache-Control: no-cache, no-store, must-revalidate
+
+# 根路径不缓存
+/
+  Cache-Control: no-cache, no-store, must-revalidate

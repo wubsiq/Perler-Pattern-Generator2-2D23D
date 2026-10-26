@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  豆师傅 · 拼豆图纸生成器 —— sitemap.xml
+  站点：https://dsf666.pages.dev（Cloudflare Pages）
+
+  【Google 抓取规则说明】
+  1. 只收录"规范 URL"（canonical）：
+     Cloudflare Pages 已开启 Pretty URLs，访问 /xxx.html 会 308 跳转到 /xxx，
+     因此这里一律写无 .html 后缀的地址，避免 Google 把带后缀的地址判为"重定向页"。
+  2. 不写 <changefreq> 和 <priority>：Google 明确表示会忽略这两个标签，写多无益。
+  3. <lastmod> 用 W3C 日期格式（YYYY-MM-DD），Google 会据此判断是否需要重新抓取。
+  4. 目录页 / 与首页是同一份内容，只保留 https://dsf666.pages.dev/ 一个入口。
+  5. 测试/调试页（debug-test、diagnostic、test-*、index-modules、demo-new-modules）、
+     内部工具页（texture-editor、sample-manager）以及尚未在导航中开放的
+     workbench（入口按钮 display:none）均不收录，避免薄内容与重复内容影响站点质量。
+-->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+
+  <url>
+    <!-- 首页：拼豆图纸生成器（图片转拼豆、自定义编辑、智能配色优化） -->
+    <loc>https://dsf666.pages.dev/</loc>
+    <lastmod>2026-10-21</lastmod>
+  </url>
+
+  <url>
+    <!-- 圆形拼豆图纸生成器 -->
+    <loc>https://dsf666.pages.dev/circular</loc>
+    <lastmod>2026-10-04</lastmod>
+  </url>
+
+</urlset>

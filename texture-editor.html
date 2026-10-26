@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>织纹素材编辑器 · 豆师傅</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#161616; --panel:#212121; --panel2:#2a2a2a; --line:#383838;
+  --fg:#e0e0e0; --dim:#9a9a9a; --dim2:#6a6a6a;
+  --accent:#4CAF50; --warn:#ff9800; --danger:#f44336; --info:#64b5f6;
+}
+body{
+  background:var(--bg); color:var(--fg);
+  font:13px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+  padding:14px; padding-bottom:60px;
+}
+h1{font-size:17px;font-weight:600;margin-bottom:2px}
+h1 .sub{font-size:12px;color:var(--dim);font-weight:400;margin-left:8px}
+.hint{font-size:12px;color:var(--dim);margin-bottom:12px;line-height:1.7}
+.hint b{color:var(--info);font-weight:600}
+.hint .warn{color:var(--warn)}
+
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;
+     padding:10px 12px;background:var(--panel);border:1px solid var(--line);border-radius:8px}
+.bar .grow{flex:1}
+button{
+  padding:6px 13px;background:#3a3a3a;color:var(--fg);border:1px solid #555;
+  border-radius:5px;cursor:pointer;font-size:13px;font-family:inherit;
+}
+button:hover{background:#4a4a4a;border-color:#666}
+button.primary{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:600}
+button.primary:hover{background:#5cbf60}
+button.warn{background:#8a5a00;color:#fff;border-color:#a06a00}
+button.danger{background:var(--danger);color:#fff;border-color:var(--danger)}
+button:disabled{opacity:.4;cursor:not-allowed}
+input[type=file]{display:none}
+
+.cols{display:grid;grid-template-columns:250px minmax(300px,380px) 1fr;gap:12px;align-items:start}
+@media(max-width:1200px){.cols{grid-template-columns:1fr}}
+
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.card>h2{
+  font-size:13px;font-weight:600;padding:9px 12px;background:var(--panel2);
+  border-bottom:1px solid var(--line);color:var(--fg);
+}
+.card>h2 .tag{float:right;font-size:11px;color:var(--dim2);font-weight:400}
+.card .body{padding:12px}
+
+/* 素材列表 */
+.vlist{max-height:420px;overflow:auto}
+.vitem{
+  padding:7px 10px;border-bottom:1px solid #2c2c2c;cursor:pointer;
+  display:flex;align-items:center;gap:8px;
+}
+.vitem:hover{background:#282828}
+.vitem.active{background:#2d3a2d;box-shadow:inset 3px 0 0 var(--accent)}
+.vitem .nm{flex:1;font-size:12px}
+.vitem .kd{
+  font-size:10px;padding:1px 5px;border-radius:3px;flex-shrink:0;
+}
+.vitem .kd.photo{background:#2d3a4d;color:#90caf9}
+.vitem .kd.vector{background:#4d3a2d;color:#ffcc80}
+.vitem canvas{width:26px;height:26px;image-rendering:pixelated;border-radius:3px;
+              border:1px solid #444;flex-shrink:0}
+
+/* 参数行 */
+.prow{display:flex;align-items:center;gap:8px;margin-bottom:9px}
+.prow label{width:64px;font-size:12px;color:var(--dim);flex-shrink:0}
+.prow input[type=range]{flex:1;min-width:0}
+.prow .val{width:50px;text-align:right;font-size:11px;color:var(--dim2);
+           font-variant-numeric:tabular-nums;flex-shrink:0}
+.prow select,.prow input[type=number]{
+  flex:1;padding:4px 6px;background:#333;color:var(--fg;border:1px solid #555;
+  border-radius:4px;font-size:12px;font-family:inherit;min-width:0;
+}
+.prow .reset{
+  width:20px;height:20px;padding:0;font-size:11px;line-height:1;border-radius:3px;
+  background:#333;border:1px solid #555;flex-shrink:0;
+}
+.sect{
+  font-size:11px;color:var(--dim2);text-transform:uppercase;letter-spacing:.5px;
+  margin:14px 0 8px;padding-bottom:4px;border-bottom:1px solid var(--line);
+}
+.sect:first-child{margin-top:0}
+
+/* 预览 */
+.pv{position:relative;background:
+   linear-gradient(45deg,#2a2a2a 25%,transparent 25%),
+   linear-gradient(-45deg,#2a2a2a 25%,transparent 25%),
+   linear-gradient(45deg,transparent 75%,#2a2a2a 75%),
+   linear-gradient(-45deg,transparent 75%,#2a2a2a 75%);
+   background-size:16px 16px;background-position:0 0,0 8px,8px -8px,-8px 0;
+   background-color:#333;
+   min-height:220px;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:6px}
+/* 3×3 铺贴：整体缩到容器内，方便一眼看全接缝 */
+#pvTile canvas{width:100%;height:auto;max-width:340px;image-rendering:auto}
+.pv canvas{image-rendering:pixelated;display:block;max-width:100%}
+.pv.side canvas{image-rendering:auto}
+.pv.side canvas{image-rendering:auto}
+.cmp{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.cmp>div>div{font-size:11px;color:var(--dim);margin-bottom:4px}
+
+.stats{
+  font-size:11px;color:var(--dim2);font-family:ui-monospace,Menlo,Consolas,monospace;
+  padding:8px 12px;background:#1a1a1a;border-top:1px solid var(--line);line-height:1.7;
+}
+.stats .ok{color:#81c784}
+.stats .bad{color:#ef9a9a}
+
+.note{
+  font-size:11px;color:var(--dim2);padding:8px 12px;background:#1e1e1e;
+  border-top:1px solid var(--line);line-height:1.7;
+}
+.note b{color:var(--warn)}
+.msg{padding:9px 12px;border-radius:6px;margin-bottom:12px;font-size:12px;display:none}
+.msg.ok{display:block;background:#1e3a1e;border:1px solid #3a5a3a;color:#a5d6a7}
+.msg.err{display:block;background:#3a1e1e;border:1px solid #5a3a3a;color:#ef9a9a}
+.msg.warn{display:block;background:#3a2e1e;border:1px solid #5a4a3a;color:#ffcc80}
+
+.empty{padding:44px 20px;text-align:center;color:var(--dim2);font-size:13px}
+.empty .big{font-size:36px;margin-bottom:12px;opacity:.35}
+
+.sticky{
+  position:fixed;left:0;right:0;bottom:0;background:#1c1c1c;
+  border-top:1px solid var(--line);padding:9px 14px;
+  display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+  font-size:12px;color:var(--dim);
+}
+.sticky .grow{flex:1}
+kbd{
+  background:#333;border:1px solid #555;border-bottom-width:2px;border-radius:3px;
+  padding:0 5px;font-size:11px;font-family:ui-monospace,monospace;
+}
+</style>
+</head>
+<body>
+
+<h1>织纹素材编辑器<span class="sub">熨烫预览用的光影 tile · 调参 → 预览 → 导出</span></h1>
+
+<div class="hint">
+  tile 是<b>量化过的浮雕数据</b>（128 = 中性），不是普通图片。所以在图片编辑器里涂它没有意义 ——
+  真正的调节旋钮是<b>生成参数</b>：无缝化策略、高通半径、高斯模糊、淡出宽度、裁哪一块（=花纹大小）。
+  <br><span class="warn">⚠</span> 改参数会重跑整条生成链路（有 Python 版同款算法，在本页面内用 JS 实现）；
+  <b>处理是在你的浏览器本地跑的，不上传任何东西</b>。
+</div>
+
+<div id="msg" class="msg"></div>
+
+<div class="bar">
+  <button id="btnImport" class="primary">📂 导入素材图片</button>
+  <input type="file" id="fileInput" accept="image/*" multiple>
+  <span style="font-size:12px;color:var(--dim2)">或把图片拖到这里</span>
+  <div class="grow"></div>
+  <button id="btnReset">↺ 全部重置</button>
+  <button id="btnExportJs" class="primary">⬇ 导出 tiles.js</button>
+</div>
+
+<div class="cols">
+
+  <!-- 素材列表 -->
+  <div class="card">
+    <h2>素材 <span class="tag" id="vcount">0</span></h2>
+    <div class="vlist" id="vlist"></div>
+    <div class="note">
+      <b>滚轮</b>调大小 / <kbd>←</kbd><kbd>→</kbd> 调 1 格<br>
+      双击名字可改名
+    </div>
+  </div>
+
+  <!-- 参数 -->
+  <div class="card">
+    <h2>生成参数 <span class="tag" id="pname">—</span></h2>
+    <div class="body" id="params">
+      <div class="empty">先导入素材</div>
+    </div>
+    <div class="stats" id="stats">—</div>
+  </div>
+
+  <!-- 预览 -->
+  <div class="card">
+    <h2>预览 <span class="tag" id="pvtip">2×2 铺贴 · 看接缝</span></h2>
+    <div class="body">
+      <div class="pv" id="pvTile"><span style="color:var(--dim2)">—</span></div>
+      <div style="height:10px"></div>
+      <div class="cmp">
+        <div>
+          <div>单张放大</div>
+          <div class="pv" id="pvOne" style="min-height:150px"><span style="color:var(--dim2)">—</span></div>
+        </div>
+        <div>
+          <div>处理前的原图</div>
+          <div class="pv side" id="pvSrc" style="min-height:150px"><span style="color:var(--dim2)">—</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="note" id="pvNote">
+      无缝检查：<b>接缝跳变</b>（越低越好，&lt;1 表示比内部纹理还平）·
+      <b>零均值</b>（均值应接近 128，否则成品整体偏亮/偏暗）
+    </div>
+  </div>
+
+</div>
+
+<div class="sticky">
+  <button id="btnSave1" class="primary">⬇ 导出当前 tile（PNG）</button>
+  <button id="btnSave2">⬇ 导出全部（PNG + tiles.js）</button>
+  <div class="grow"></div>
+  <span id="status">导入素材开始</span>
+</div>
+
+<script>
+/* ══════════════════════════════════════════════════════════════
+   素材状态
+   ══════════════════════════════════════════════════════════════ */
+let VARS = [];          // {id,name,img,p:{...},meta:{...}}
+let CUR = -1;
+let SEQ = 0;
+
+const TILE = 256;       // 输出 tile 尺寸（固定，跟生成脚本一致）
+const DEFAULTS = {
+  // ★ 周期与密度（矢量花纹专用，2026-10-16 加）
+  unitX:   0,           // 花纹真实重复周期 X（原图像素）。0 = 自动检测
+  unitY:   0,
+  density: 2,           // tile 里放几个单元。★ 决定美感的核心旋钮
+  autoUnit:true,        // 自动检测周期（roll 验证法）
+  // 通用
+  crop:    1.0,         // 裁哪一块（0.2~1.0）：1=全图，0.5=中心一半 → 花纹变大
+  rotate:  0,           // 素材旋转（度）：把花纹方向调正
+  flipX:   false,
+  flipY:   false,
+  // 无缝化策略
+  mode:    'auto',      // auto | fade | mirror
+  hpR:     12,          // 高通半径：去掉大面积色偏，保留织纹
+  blur:    4.0,         // 高斯模糊：硬边线条 → 平滑浮雕
+  fade:    26,          // 边界淡出宽度（fade 策略）
+  // 后处理
+  gain:    1.0,         // 光影幅度倍率
+  levels:  16,          // 量化级数（8/16/32）
+  compress: true,       // 16 级量化（压体积）
+};
+
+const MODES = [
+  {v:'auto',  t:'自动（照片用镜像 / 矢量用淡出）'},
+  {v:'fade',  t:'边界淡出（矢量图 / 不可周期时）'},
+  {v:'mirror',t:'四象限镜像（实拍照 / 各向同性织纹）'},
+];
+
+/* ══════════════════════════════════════════════════════════════
+   算法（与 tools/gen-iron-textures.py 同款实现）
+   ══════════════════════════════════════════════════════════════ */
+
+/**
+ * 盒式模糊（反射边界），O(1)/像素。
+ * 与 tools/gen-iron-textures.py 的 box_blur 严格同款。
+ *
+ * ★ 移植时踩的坑：numpy 的 np.cumsum(np.cumsum(ap, axis=0), axis=1)
+ *   是**先沿列方向累积，再沿行方向累积**（axis=0 = 纵轴）。
+ *   我一开始写成「先 x 后 y」，窗口和整体偏移，输出全错。
+ *   对拍方法：a = arange(25).reshape(5,5)，r=1 → out[0,0] 必须是 4.0。
+ */
+function boxBlur(A, r){
+  const H=A.length, W=A[0].length;
+  r=Math.max(0, Math.round(r));
+  if(r===0) return A.map(row=>Float64Array.from(row));
+  const k=r*2+1;
+
+  // 1) 反射边界扩展（numpy mode='reflect'：不重复边缘，…2,1,0,1,2…）
+  const refl=(i,n)=>{
+    if(n<=1) return 0;
+    const per=2*(n-1);
+    let m=((i%per)+per)%per;
+    return (m<n)?m:(per-m);
+  };
+  const EH=H+2*r, EW=W+2*r;
+  const e=new Array(EH);
+  for(let y=0;y<EH;y++){
+    const src=A[refl(y-r,H)];
+    const row=new Float64Array(EW);
+    for(let x=0;x<EW;x++) row[x]=src[refl(x-r,W)];
+    e[y]=row;
+  }
+
+  // 2) 第一次累积：沿 axis=0（纵轴，每个 x 独立往下加）
+  const c1=new Array(EH);
+  for(let x=0;x<EW;x++){
+    const col=new Float64Array(EH);
+    let t=0;
+    for(let y=0;y<EH;y++){ t+=e[y][x]; col[y]=t; }
+    c1[x]=col;                       // c1[x][y] = e[0..y][x] 之和
+  }
+  // 3) 第二次累积：沿 axis=1（横轴）
+  //    ii2[y][x] = Σ c1[0..y][0..x]  ← numpy 的 ii[y][x]
+  const EW1=EW+1, EH1=EH+1;
+  const ii2=[];                       // ii2[y][x]，第 0 行/列恒 0（对应 np.pad）
+  for(let y=0;y<EH1;y++) ii2.push(new Float64Array(EW1));
+  for(let y=0;y<EH;y++){
+    let t=0;
+    for(let x=0;x<EW;x++){ t+=c1[x][y]; ii2[y+1][x+1]=t; }
+  }
+
+  // 4) 窗口和：numpy 的 (ii2[k:k+H, k:k+W] - ii2[0:H, k:k+W]
+  //                                  - ii2[k:k+H, 0:W] + ii2[0:H, 0:W]) / (k*k)
+  const out=new Array(H);
+  for(let y=0;y<H;y++){
+    const row=new Float64Array(W);
+    for(let x=0;x<W;x++){
+      row[x]=(ii2[y+k][x+k]-ii2[y][x+k]-ii2[y+k][x]+ii2[y][x])/(k*k);
+    }
+    out[y]=row;
+  }
+  return out;
+}
+
+/** 高斯近似：三次盒式模糊（半径 = σ） */
+function gaussApprox(A, sigma){
+  if(sigma<=0.05) return A;
+  let T=A;
+  for(let i=0;i<3;i++) T=boxBlur(T, sigma);
+  return T;
+}
+
+function fillRect(A,idata,sx,sy,sw,sh){
+  const IW=idata.width, IH=idata.height;
+  // ★ 双侧钳制：sw/sh 都不能超过目标 tile 尺寸（crop<1 时 sh 可能远大于 TILE）
+  const W=Math.min(sw, A[0].length), H=Math.min(sh, A.length);
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    // ★ 钳制：采样必须落在图片内（drawImage 到小画布时边界会溢出，
+    //   直接算索引会取到 undefined，getImageData 之后报 undefined 错误）
+    const px=Math.min(IW-1, Math.max(0, sx+x));
+    const py=Math.min(IH-1, Math.max(0, sy+y));
+    const si=((py>>2)*IW+(px>>2))<<2;
+    const a=idata.data[si+3]/255;
+    if(a<=0){A[y][x]=0;continue;}
+    // 预乘还原（透明 PNG 存的是预乘值）
+    A[y][x]=(idata.data[si]*0.299+idata.data[si+1]*0.587+idata.data[si+2]*0.114)*a;
+  }
+}
+
+function rotateFill(A,W,H,deg){
+  if(deg%360===0)return;
+  const rad=deg*Math.PI/180, cos=Math.cos(rad), sin=Math.sin(rad);
+  const cx=W/2, cy=H/2, out=[];
+  for(let y=0;y<H;y++){out.push(new Float64Array(W));}
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    // 目标像素 → 源坐标（反向映射）
+    const dx=x-cx, dy=y-cy;
+    const sx=( dx*cos+dy*sin)+cx;
+    const sy=(-dx*sin+dy*cos)+cy;
+    const xi=Math.floor(sx), yi=Math.floor(sy);
+    if(xi<0||yi<0||xi>=W||yi>=H){out[y][x]=0;continue;}
+    out[y][x]=A[yi][xi];
+  }
+  for(let y=0;y<H;y++)A[y]=out[y];
+}
+
+function stats(A){
+  let mn=Infinity,mx=-Infinity,s=0,n=0;
+  for(let y=0;y<A.length;y++)for(let x=0;x<A[0].length;x++){
+    const v=A[y][x]; if(v<mn)mn=v; if(v>mx)mx=v; s+=v; n++;}
+  return {mn,mx,mean:s/n};
+}
+
+// 环形对齐：x/y 各找一个 roll 让接缝差最小
+function alignAxis(A,axis){
+  const H=A.length, W=A[0].length;
+  let best=0, bs=Infinity;
+  const lim=(axis===1?W:H)>>1;
+  for(let sh=1;sh<lim;sh++){
+    let seam=0,n=0;
+    if(axis===1){
+      for(let y=0;y<H;y++){seam+=Math.abs(A[y][(W-sh)%W]-A[y][(W-1-sh+W)%W]);n++;}
+    }else{
+      for(let x=0;x<W;x++){seam+=Math.abs(A[(H-sh)%H][x]-A[(H-1-sh+H)%H][x]);n++;}
+    }
+    seam/=n;
+    if(seam<bs){bs=seam;best=sh;}
+  }
+  // 应用 roll
+  const out=[];
+  for(let y=0;y<H;y++){
+    const row=new Float64Array(W);
+    for(let x=0;x<W;x++){
+      row[x]= axis===1 ? A[y][(x+best)%W] : A[(y+best)%H][x];
+    }
+    out.push(row);
+  }
+  if(axis===1){ for(let y=0;y<H;y++)A[y]=out[y]; }
+  else { for(let y=0;y<H;y++)A[y]=out[y]; }
+  // x 方向 roll 后 y 也要重新按行读 —— 上面已经把两个轴都写成新行，够了
+  return A;
+}
+
+/**
+ * 核心：素材 → 无缝零均值光影场（-1..1 的 Float64 二维数组）
+ */
+let FADE_W=null;
+function buildField(img, p){
+  // ---- 0) Image → ImageData（一次，之后全在像素数组上算）----
+  // ★ 必须先画进 canvas 再 getImageData：
+  //   直接读 HTMLImageElement 没有 .data/.width 像素数组
+  const tmp=document.createElement('canvas');
+  tmp.width=img.naturalWidth||img.width;
+  tmp.height=img.naturalHeight||img.height;
+  const tcx=tmp.getContext('2d',{willReadFrequently:true});
+  tcx.clearRect(0,0,tmp.width,tmp.height);
+  tcx.drawImage(img,0,0);
+  const idata=tcx.getImageData(0,0,tmp.width,tmp.height);
+
+  // ---- 1) 取样 → TILE×TILE ----
+  let A=[];
+  for(let y=0;y<TILE;y++)A.push(new Float64Array(TILE));
+  let unitNote='';
+  // ★ 优先「按周期取单元」——保住花纹形状完整性
+  let px=p.unitX|0, py=p.unitY|0;
+  if(p.autoUnit && (!px||!py)){
+    const det=detectPeriod(idata, 0.10, 0.48);
+    if(det){ px=det.px; py=det.py; unitNote=`自动检出周期 ${px}×${py}`; }
+  }
+  if(px>0 && py>0){
+    const r=unitToTile(idata, px, py, Math.max(1, p.density||1));
+    unitNote=(unitNote?unitNote+' · ':'')+r.note;
+    fillRect(A, r.canvas.getContext('2d').getImageData(0,0,TILE,TILE), 0,0,TILE,TILE);
+  }else{
+    // 没有周期 → 退回「整图缩放」（复数路径，由 scale 控制大小）
+    const sc=Math.max(0.1,p.scale||1);
+    const sw=Math.max(8,Math.round(idata.width/sc));
+    const sh=Math.max(8,Math.round(idata.height/sc));
+    const sx=Math.round((idata.width-sw)/2), sy=Math.round((idata.height-sh)/2);
+    fillRect(A,idata,sx,sy,sw,sh);
+    unitNote='未检出周期 → 整图缩放';
+  }
+  if(p.rotate%360!==0) rotateFill(A,TILE,TILE,p.rotate);
+  if(p.flipX||p.flipY){
+    const out=[];
+    for(let y=0;y<TILE;y++){
+      const row=new Float64Array(TILE);
+      for(let x=0;x<TILE;x++){
+        row[x]=A[p.flipY?(TILE-1-y):y][p.flipX?(TILE-1-x):x];
+      }
+      out.push(row);
+    }
+    A=out;
+  }
+
+  // ---- 2) 选策略 ----
+  // ★ 有周期 = 矢量花纹 → 必须走 fade（mirror 在矢量花纹上会留正中十字接缝）
+  const hasUnit = (p.unitX>0 && p.unitY>0);
+  const mode = p.mode==='auto'
+      ? (isVectorLike(img, hasUnit) ? 'fade' : 'mirror')
+      : p.mode;
+
+  if(mode==='mirror'){
+    FADE_W = null;
+    // 四象限镜像 → 相邻象限在边界处天然连续
+    const c=TILE>>1, M=[];
+    for(let y=0;y<TILE;y++)M.push(new Float64Array(TILE));
+    for(let y=0;y<c;y++)for(let x=0;x<c;x++)M[y][x]=A[c-1-y][c-1-x];
+    for(let y=0;y<c;y++)for(let x=c;x<TILE;x++)M[y][x]=A[c-1-y][TILE-1-(x-c)];
+    for(let y=c;y<TILE;y++)for(let x=0;x<c;x++)M[y][x]=A[TILE-1-(y-c)][c-1-x];
+    for(let y=c;y<TILE;y++)for(let x=c;x<TILE;x++)M[y][x]=A[TILE-1-(y-c)][TILE-1-(x-c)];
+    A=M;
+    A=alignAxis(A,1);
+    A=alignAxis(A,0);
+    FADE_W = null;
+    // 高通
+    const base=boxBlur(A,Math.max(2,Math.round(p.hpR)));
+    for(let y=0;y<TILE;y++)for(let x=0;x<TILE;x++)A[y][x]-=base[y][x];
+    // 距离场化（高斯近似：三次盒式模糊 ≈ 高斯）
+    if(p.blur>0.05) A=gaussApprox(A, p.blur);
+  } else {
+    // 边界淡出法
+    let base=boxBlur(A,Math.max(2,Math.round(p.hpR)));
+    for(let y=0;y<TILE;y++)for(let x=0;x<TILE;x++)A[y][x]-=base[y][x];
+    if(p.blur>0.05) A=gaussApprox(A, p.blur);
+    // 零均值
+    let m=0; for(let y=0;y<TILE;y++)for(let x=0;x<TILE;x++)m+=A[y][x]; m/=TILE*TILE;
+    for(let y=0;y<TILE;y++)for(let x=0;x<TILE;x++)A[y][x]-=m;
+    // 淡出
+    const f=Math.max(0,p.fade);
+    FADE_W = [];
+    for(let y=0;y<TILE;y++){
+      const dy=Math.min(y,TILE-1-y);
+      FADE_W.push(Math.max(0,Math.min(1,(dy-f/2)/(f/2||1))));
+    }
+    for(let y=0;y<TILE;y++)for(let x=0;x<TILE;x++){
+      const dx=Math.min(x,TILE-1-x);
+      const wx=Math.max(0,Math.min(1,(dx-f/2)/(f/2||1)));
+      A[y][x]*=Math.min(FADE_W[y],wx);
+    }
+  }
+
+  // ---- 3) 零均值 + 增益 + 对称归一化 ----
+  let m=0; for(let y=0;y<TILE;y++)for(let x=0;x<TILE;x++)m+=A[y][x]; m/=TILE*TILE;
+  for(let y=0;y<TILE;y++)for(let x=0;x<TILE;x++)A[y][x]=(A[y][x]-m)*(p.gain||1);
+
+  // ★ 归一化只用「未淡出的中心区」统计 —— 否则边缘被拉回有信号，接缝又回来
+  //   （Python 版 unit_seamless_light 同一个坑：全图统计 → 边缘均值 146≠128）
+  const flat=[];
+  for(let y=0;y<TILE;y++)for(let x=0;x<TILE;x++){
+    if(FADE_W && Math.min(FADE_W[y], (Math.min(x,TILE-1-x)>=Math.max(0,(p.fade||0)/2))?1:0) < 0.9) continue;
+    flat.push(A[y][x]);
+  }
+  if(flat.length<100) for(let y=0;y<TILE;y++)for(let x=0;x<TILE;x++)flat.push(A[y][x]);
+  flat.sort((a,b)=>a-b);
+  const q=(t)=>flat[Math.max(0,Math.min(flat.length-1,Math.floor(flat.length*t)))];
+  const lo=q(0.01), hi=q(0.99);
+  const amp=Math.max(Math.abs(lo),Math.abs(hi))||1;
+  for(let y=0;y<TILE;y++)for(let x=0;x<TILE;x++){
+    A[y][x]=Math.max(-1,Math.min(1,A[y][x]/amp));
+  }
+  return {A, mode, unitNote};
+}
+
+/**
+ * ★ roll 验证法检测重复周期
+ *
+ * 这四张素材都是 repeating pattern 截图。把图按候选周期 roll 回去，
+ * 周期对了的话 roll 后的图和原图几乎一样（差异最小）。
+ * 自相关会出假阳性（实测给过 3px 这种噪声峰），roll 法是全局验证，不会。
+ */
+function detectPeriod(idata, minFrac, maxFrac){
+  const H=idata.height, W=idata.width;
+  // ★ 1/4 降采样加速（周期尺度很大，不影响判定）
+  //   直接从 ImageData 取样 —— drawImage 不接受 ImageData 当源
+  const sc=4, w=Math.floor(W/sc), h=Math.floor(H/sc);
+  const d=idata.data;
+  const base=new Float64Array(w*h);
+  let mean=0;
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      const si=(((y*sc)>>0)*W + ((x*sc)>>0))<<2;
+      const v=d[si]*0.299+d[si+1]*0.587+d[si+2]*0.114;
+      base[y*w+x]=v; mean+=v;
+    }
+  }
+  mean/=w*h;
+  for(let i=0;i<w*h;i++) base[i]-=mean;
+
+  const lo=Math.max(3, Math.floor(Math.min(w,h)*minFrac));
+  const hi=Math.floor(Math.min(w,h)*maxFrac);
+  if(hi<=lo) return null;
+
+  const scan=(ax)=>{
+    let bs=1e18, bp=0;
+    for(let p=lo;p<hi;p++){
+      let s=0;
+      if(ax===1){ for(let y=0;y<h;y++){ const base2=y*w;
+        for(let x=0;x<w;x++){ s+=Math.abs(base[base2+((x+p)%w)]-base[base2+x]); } } }
+      else{ for(let y=0;y<h;y++){ const y2=(y+p)%h, y1=y*w, y2b=y2*w;
+        for(let x=0;x<w;x++){ s+=Math.abs(base[y2b+x]-base[y1+x]); } } }
+      s/=w*h;
+      if(s<bs){ bs=s; bp=p; }
+    }
+    return {s:bs, p:bp};
+  };
+  const rx=scan(1), ry=scan(0);
+  // 随机偏移基线
+  let rnd=0, cnt=0;
+  [7,11,17,23,29].forEach(sh=>{
+    let s=0;
+    for(let y=0;y<h;y++){ const y1=y*w, y2=((y+(sh%h))%h)*w;
+      for(let x=0;x<w;x++){ s+=Math.abs(base[y2+((x+sh)%w)]-base[y1+x]); } }
+    rnd+=s/(w*h); cnt++;
+  });
+  const bs=rnd/Math.max(1,cnt);
+  if(rx.s>bs*0.6 || ry.s>bs*0.6) return null;   // 检测不到可信周期
+  return { px: rx.p*sc, py: ry.p*sc, score: (rx.s+ry.s)/(2*bs) };
+}
+
+/**
+ * ★ 按周期裁一个完整单元，铺成 TILE×TILE
+ *
+ * 为什么必须这么做（2026-10-16 实测）：
+ *   青海波单元 311×320，原图 1244×655。整张压到 256 后单元只剩 42px，
+ *   比一颗豆（30px）还小 → 每颗豆只能看到半截花纹，形状全丢。
+ *   按单元取样后，一个单元盖住 4~8 颗豆，形状完整。
+ *
+ * 三步：裁单元 → 按 density 缩放 → 整数倍环绕铺满
+ */
+function unitToTile(idata, px, py, density){
+  const W=idata.width, H=idata.height;
+  // 1) 裁单元（取中间，避开边缘瑕疵）
+  const cw=Math.min(px, W), ch=Math.min(py, H);
+  const x0=Math.max(0, Math.floor((W-cw)/2)), y0=Math.max(0, Math.floor((H-ch)/2));
+  // ★ drawImage 不接受 ImageData → 先放回一张 canvas 当中间载体
+  const src=document.createElement('canvas'); src.width=W; src.height=H;
+  const srcc=src.getContext('2d');
+  srcc.putImageData(idata,0,0);
+  const u=document.createElement('canvas'); u.width=cw; u.height=ch;
+  const uc=u.getContext('2d',{willReadFrequently:true});
+  uc.clearRect(0,0,cw,ch);
+  uc.drawImage(src, x0,y0,cw,ch, 0,0,cw,ch);
+
+  // 2) 缩放：让 density 个单元铺满一条边
+  //    ★ 用几何平均而不是 max(px,py)：斜纹单元 221×63（长宽比 3.5:1），
+  //      按长边算会把短边压到 18px → 碎成渣。
+  const geo=Math.sqrt(cw*ch);
+  const target=TILE/Math.max(1, density);
+  const k=target/Math.max(1, geo);
+  let nw=Math.max(2,Math.round(cw*k)), nh=Math.max(2,Math.round(ch*k));
+  // 整除修正：调成 TILE 的整数分之一，避免环绕多出一倍
+  const fit=(n)=>{ for(let d=1;d<=6;d++){ if(Math.abs(TILE/d-n)/n<0.06) return Math.max(2,Math.round(TILE/d)); }
+    return Math.max(2,Math.round(TILE/Math.max(1,Math.round(TILE/n)))); };
+  nw=fit(nw); nh=fit(nh);
+
+  const s=document.createElement('canvas'); s.width=nw; s.height=nh;
+  const sc=s.getContext('2d');
+  sc.clearRect(0,0,nw,nh);
+  sc.imageSmoothingQuality='high';
+  sc.drawImage(u,0,0,nw,nh);
+
+  // 3) 整数倍环绕铺满（数学无缝）
+  const rx=Math.max(1, Math.ceil(TILE/nw)), ry=Math.max(1, Math.ceil(TILE/nh));
+  const t=document.createElement('canvas'); t.width=TILE; t.height=TILE;
+  const tcx=t.getContext('2d',{willReadFrequently:true});
+  tcx.clearRect(0,0,TILE,TILE);
+  for(let y=0;y<ry;y++) for(let x=0;x<rx;x++) tcx.drawImage(s, x*nw, y*nh);
+  return { canvas:t, note:`原单元 ${cw}×${ch} → ${nw}×${nh} → 沿边 ${rx}×${ry} 个（≈${(TILE/Math.max(rx,ry)/30).toFixed(1)} 颗豆/单元）` };
+}
+
+/**
+ * 判断素材是「矢量花纹」还是「实拍照」。
+ *
+ * 判据：相邻像素差 > 40 的比例 —— 矢量图有描边硬边，比例高。
+ *
+ * ★ 踩过的坑：阈值 0.15 太严，实测这四张 pattern 截图里有三张被判成「实拍」，
+ *   于是走了 mirror 分支（没有淡出）→ 接缝 3~15，直接坏掉。
+ *   现在两条：
+ *     ① 阈值放到 0.06
+ *     ② **有周期就直接判矢量** —— 有重复周期本身就是矢量花纹的定义
+ */
+function isVectorLike(img, hasUnit){
+  if(hasUnit) return true;          // 有周期 = 矢量花纹
+  let sharp=0,n=0;
+  const c=document.createElement('canvas');
+  const s=64; c.width=s;c.height=s;
+  const cx=c.getContext('2d',{willReadFrequently:true});
+  cx.clearRect(0,0,s,s);
+  cx.drawImage(img,0,0,s,s);
+  const d=cx.getImageData(0,0,s,s).data;
+  for(let y=1;y<s;y++)for(let x=1;x<s-1;x++){
+    const i=(y*s+x)*4, l1=d[i]*0.299+d[i+1]*0.587+d[i+2]*0.114;
+    const j=(y*s+x+1)*4, l2=d[j]*0.299+d[j+1]*0.587+d[j+2]*0.114;
+    if(Math.abs(l1-l2)>40)sharp++;
+    n++;
+  }
+  return sharp/n>0.06;
+}
+
+/** 光影场 → ImageData（128 中性） */
+function fieldToImage(A){
+  const c=document.createElement('canvas'); c.width=TILE;c.height=TILE;
+  const cx=c.getContext('2d');
+  const id=cx.createImageData(TILE,TILE);
+  for(let y=0;y<TILE;y++)for(let x=0;x<TILE;x++){
+    const g=Math.round((A[y][x]*0.5+0.5)*255);
+    const i=(y*TILE+x)*4;
+    id.data[i]=id.data[i+1]=id.data[i+2]=g; id.data[i+3]=255;
+  }
+  cx.putImageData(id,0,0);
+  return c;
+}
+
+/** 量化（与生成脚本同款：灰阶空间对齐中性） */
+function quantize(cvs, levels){
+  if(levels>=64) return cvs;
+  const cx=cvs.getContext('2d');
+  const id=cx.getImageData(0,0,TILE,TILE), d=id.data;
+  const LS=Math.floor(256/levels);
+  // 先还原连续灰
+  const gray=new Float64Array(TILE*TILE);
+  for(let i=0;i<TILE*TILE;i++) gray[i]=d[i*4];
+  // 量化到 levels 级（级心 = lv*LS + LS/2）
+  const lv=new Float64Array(TILE*TILE);
+  for(let i=0;i<TILE*TILE;i++) lv[i]=Math.max(0,Math.min(levels-1,Math.round(gray[i]/LS)));
+  // 灰阶空间平移，对齐中性 128
+  //   Python: gray + round((128 - gray.mean()) / LS) * LS
+  //   即：把量化后的整体均值挪到 128，且位移必须是 LS 的整数倍（不能引入新灰阶）
+  let m=0; for(let i=0;i<TILE*TILE;i++)m+=lv[i]*LS+LS/2;
+  m/=TILE*TILE;
+  const shift=Math.round((128.0-m)/LS)*LS;
+  for(let i=0;i<TILE*TILE;i++){
+    const g=Math.max(LS/2,Math.min(255-LS/2, lv[i]*LS+LS/2+shift));
+    d[i*4]=d[i*4+1]=d[i*4+2]=g;
+  }
+  cx.putImageData(id,0,0);
+  return cvs;
+}
+
+/**
+ * 无缝指标
+ *
+ * ★ 接缝比 = 接缝处跳变 / 内部平均梯度。分母必须加下限保护：
+ *   纯色/极低对比的 tile 内部梯度可能接近 0，会算出 3e10 这种爆表值。
+ *   下限取 1.0 灰阶（量化步长的 1/16），低于它说明"内部也没有纹理"，
+ *   此时接缝比没有意义，直接按"无纹理"处理。
+ */
+function seamMetric(cvs){
+  const cx=cvs.getContext('2d');
+  const d=cx.getImageData(0,0,TILE,TILE).data;
+  const g=(x,y)=>d[(y*TILE+x)*4];
+
+  // 接缝处跳变
+  let jl=0,nl=0, ju=0,nu=0;
+  for(let y=0;y<TILE;y++){ jl+=Math.abs(g(0,y)-g(TILE-1,y)); nl++; }
+  for(let x=0;x<TILE;x++){ ju+=Math.abs(g(x,0)-g(x,TILE-1)); nu++; }
+  jl/=nl; ju/=nu;
+
+  // 内部平均梯度（用内部相邻像素对）
+  let il=0,ml=0, iu=0,mu=0;
+  for(let y=0;y<TILE;y++){ il+=Math.abs(g(y,10)-g(y,11)); ml++; }
+  for(let x=0;x<TILE;x++){ iu+=Math.abs(g(10,x)-g(11,x)); mu++; }
+  il/=ml; iu/=mu;
+
+  const FLOOR=1.0;
+  const lr = il<FLOOR ? 0 : jl/il;
+  const ud = iu<FLOOR ? 0 : ju/iu;
+
+  let m=0; for(let i=0;i<TILE*TILE;i++)m+=d[i*4]; m/=TILE*TILE;
+  let sd=0; for(let i=0;i<TILE*TILE;i++)sd+=(d[i*4]-m)**2;
+  sd=Math.sqrt(sd/(TILE*TILE));
+
+  return {lr,ud,jumpL:jl,jumpU:ju,gradL:il,gradU:iu,mean:m,std:sd,flat:(il<FLOOR||iu<FLOOR)};
+}
+
+/* ══════════════════════════════════════════════════════════════
+   UI
+   ══════════════════════════════════════════════════════════════ */
+const $=id=>document.getElementById(id);
+
+function showMsg(txt, kind){
+  const m=$('msg');
+  if(!txt){m.style.display='none';return;}
+  m.className='msg '+kind; m.textContent=txt; m.style.display='block';
+}
+
+function newVar(img, name){
+  const id='v'+(++SEQ);
+  return {id, img, name:name||('素材'+SEQ), p:Object.assign({},DEFAULTS)};
+}
+
+function renderList(){
+  const box=$('vlist');
+  $('vcount').textContent=VARS.length;
+  if(!VARS.length){ box.innerHTML='<div style="padding:24px;text-align:center;color:var(--dim2);font-size:12px">还没有素材</div>'; return; }
+  box.innerHTML='';
+  VARS.forEach((v,i)=>{
+    const d=document.createElement('div');
+    d.className='vitem'+(i===CUR?' active':'');
+    const cv=document.createElement('canvas'); cv.width=cv.height=TILE;
+    // 缩略图走 32px 小图（快 60 倍），且量化关掉 —— 缩略图只是辨认形状
+    try{
+      const th=thumbField(v);
+      cv.getContext('2d').putImageData(th,0,0);
+    }catch(e){ console.warn('缩略图失败', e); }
+    const nm=document.createElement('div'); nm.className='nm'; nm.textContent=v.name;
+    nm.ondblclick=()=>{
+      const s=prompt('改名：', v.name);
+      if(s!==null){ v.name=s.trim()||v.name; renderList(); }
+    };
+    const kd=document.createElement('div');
+    kd.className='kd '+(isVectorLike(v.img)?'vector':'photo');
+    kd.textContent=isVectorLike(v.img)?'矢量':'实拍';
+    d.appendChild(cv); d.appendChild(nm); d.appendChild(kd);
+    d.onclick=()=>{ CUR=i; renderAll(); };
+    box.appendChild(d);
+  });
+}
+
+const PARAMS=[
+  {sec:'素材几何', items:[
+    {k:'crop',   label:'裁剪',   min:0.15,max:1,   step:0.05, hint:'裁图中心的一块。调小 → 纹理变大（取样更少区域）'},
+    {k:'rotate', label:'旋转',   min:0,   max:360, step:1,    hint:'素材旋转（度）。把花纹方向调正'},
+    {k:'flipX',  label:'水平翻转',bool:true, hint:'左右镜像'},
+    {k:'flipY',  label:'垂直翻转',bool:true, hint:'上下镜像'},
+  ]},
+  {sec:'花纹密度（矢量纹）', items:[
+    {k:'density',label:'单元数', min:1,max:6,step:1, vectorOnly:true,
+     hint:'★ tile 里放几个花纹单元。1 个 = 花纹最粗最抢眼；2 个 = 平衡；4 个以上接近整图压扁'},
+    {k:'autoUnit',label:'自动检周期',bool:true,
+     hint:'用 roll 验证法自动检测素材的重复周期（比自相关可靠，不会出假阳性）'},
+    {k:'unitX',  label:'周期X', min:0,max:900,step:1, vectorOnly:true,
+     hint:'素材的真实重复周期 X（原图像素）。检测不准时手动填'},
+    {k:'unitY',  label:'周期Y', min:0,max:900,step:1, vectorOnly:true,
+     hint:'素材的真实重复周期 Y（原图像素）'},
+  ]},
+  {sec:'无缝化', items:[
+    {k:'mode', label:'策略', sel:MODES, hint:'矢量图用「边界淡出」，实拍照用「四象限镜像」。自动会按边缘锐度判断'},
+    {k:'hpR',  label:'高通', min:2,  max:30, step:1, hint:'减掉多大的低频基底。太小 → 残留色偏；太大 → 织纹细节丢失'},
+    {k:'blur', label:'浮雕化', min:0,  max:8,  step:0.5,hint:'硬边线条 → 平滑浮雕。矢量图建议 3~5，实拍照 0~2'},
+    {k:'fade', label:'淡出', min:0,  max:80, step:2,  fadeOnly:true, hint:'边界淡出到中性灰的宽度（像素）。太宽 → 有效区太小'},
+  ]},
+  {sec:'后处理', items:[
+    {k:'gain', label:'幅度', min:0.2,max:3,  step:0.05,hint:'光影强弱。浮雕摆幅会按这个缩放'},
+    {k:'levels',label:'量化', sel:[
+      {v:64,t:'64 级（无损，体积最大）'},
+      {v:32,t:'32 级'},
+      {v:16,t:'16 级（体积最小，噪声 std≈4.6 灰阶）'},
+      {v:8, t:'8 级（会有可见色阶）'},
+    ], hint:'压体积用。16 级时量化噪声只有摆幅的 3%，肉眼看不出'},
+  ]},
+];
+
+let debounce=null;
+function renderParams(){
+  const box=$('params');
+  if(CUR<0){ box.innerHTML='<div class="empty">先导入素材</div>'; return; }
+  const v=VARS[CUR];
+  $('pname').textContent=v.name;
+  box.innerHTML='';
+  PARAMS.forEach(grp=>{
+    const h=document.createElement('div'); h.className='sect'; h.textContent=grp.sec;
+    box.appendChild(h);
+    grp.items.forEach(it=>{
+      if(it.fadeOnly && v.p.mode==='mirror') return;
+      // 矢量专属项：只在矢量素材上显示
+      if(it.vectorOnly && !isVectorLike(v.img, (v.p.unitX>0&&v.p.unitY>0))) return;
+      const row=document.createElement('div'); row.className='prow';
+      const lab=document.createElement('label'); lab.textContent=it.label;
+      lab.title=it.hint||''; row.appendChild(lab);
+
+      if(it.bool){
+        const c=document.createElement('input'); c.type='checkbox'; c.checked=v.p[it.k];
+        c.onchange=()=>{ v.p[it.k]=c.checked; schedule(); };
+        row.appendChild(c);
+      } else if(it.sel){
+        const s=document.createElement('select');
+        it.sel.forEach(o=>{
+          const op=document.createElement('option');
+          op.value=o.v; op.textContent=o.t;
+          if(String(o.v)===String(v.p[it.k])) op.selected=true;
+          s.appendChild(op);
+        });
+        s.onchange=()=>{ v.p[it.k]= isNaN(+s.value)? s.value : +s.value; renderParams(); schedule(); };
+        row.appendChild(s);
+        const vw=document.createElement('span'); vw.className='val'; vw.textContent='';
+        row.appendChild(vw);
+      } else {
+        const r=document.createElement('input');
+        r.type='range'; r.min=it.min; r.max=it.max; r.step=it.step; r.value=v.p[it.k];
+        r.oninput=()=>{ v.p[it.k]=+r.value; val.textContent=r.value; schedule(120); };
+        r.onwheel=(e)=>{ e.preventDefault();
+          v.p[it.k]=Math.max(it.min,Math.min(it.max, v.p[it.k] - Math.sign(e.deltaY)*it.step));
+          r.value=v.p[it.k]; val.textContent=r.value; schedule(120); };
+        r.onkeydown=(e)=>{
+          if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
+            v.p[it.k]=+r.value; schedule();  // 键盘已改 value，这里只需重画
+          }
+        };
+        const val=document.createElement('span'); val.className='val'; val.textContent=r.value;
+        const rs=document.createElement('button'); rs.className='reset'; rs.textContent='↺';
+        rs.title='恢复默认 '+(DEFAULTS[it.k]!==undefined?DEFAULTS[it.k]:'');
+        rs.onclick=()=>{ v.p[it.k]=DEFAULTS[it.k]; renderParams(); schedule(); };
+        row.appendChild(r); row.appendChild(val); row.appendChild(rs);
+      }
+      box.appendChild(row);
+    });
+  });
+}
+
+function schedule(delay){
+  clearTimeout(debounce);
+  debounce=setTimeout(renderPreview, delay||0);
+}
+
+function renderPreview(){
+  if(CUR<0){ setPv('pvTile',null); setPv('pvOne',null); setPv('pvSrc',null); $('stats').textContent='—'; return; }
+  const v=VARS[CUR];
+  const t0=performance.now();
+  let r;
+  try{ r=buildField(v.img,v.p); }
+  catch(e){ showMsg('处理失败：'+e.message,'err'); return; }
+  let cvs=fieldToImage(r.A);
+  if(v.p.levels<64) cvs=quantize(cvs,v.p.levels);
+  const ms=(performance.now()-t0).toFixed(0);
+
+  // 3×3 铺贴
+  const rep=document.createElement('canvas'); rep.width=TILE*2; rep.height=TILE*2;
+  const rc=rep.getContext('2d');
+  for(let y=0;y<2;y++)for(let x=0;x<2;x++) rc.drawImage(cvs,x*TILE,y*TILE);
+  setPv('pvTile',rep);
+
+  setPv('pvOne',cvs);
+
+  // 原图
+  const src=document.createElement('canvas'); src.width=src.height=200;
+  const sc=src.getContext('2d');
+  const s=Math.min(200/v.img.width,200/v.img.height);
+  const w=Math.round(v.img.width*s), h=Math.round(v.img.height*s);
+  sc.fillStyle='#2a2a2a'; sc.fillRect(0,0,200,200);
+  sc.drawImage(v.img,(200-w)/2,(200-h)/2,w,h);
+  setPv('pvSrc',src);
+
+  // 指标
+  const m=seamMetric(cvs);
+  const midOK = Math.abs(m.mean-128)<12;
+  let seamTxt;
+  if(m.flat){
+    seamTxt='<span class="bad">内部几乎无纹理，接缝比无意义</span>'
+          +'（接缝跳变 '+m.jumpL.toFixed(2)+'/'+m.jumpU.toFixed(2)+'，内部梯度 ≈0）'
+          +'<br><span style="color:var(--warn)">提示：调大「浮雕化」或调小「高通」，让纹理出来</span>';
+  }else{
+    const seamOK = Math.max(m.lr,m.ud)<1.0;
+    seamTxt='接缝跳变 LR <span class="'+(m.lr<1?'ok':'bad')+'">'+m.lr.toFixed(2)+'</span> / '+
+      'UD <span class="'+(m.ud<1?'ok':'bad')+'">'+m.ud.toFixed(2)+'</span> '+
+      (seamOK?'<span class="ok">✓ 无缝</span>':'<span class="bad">✗ 有缝</span>');
+  }
+  $('stats').innerHTML =
+    '耗时 '+ms+'ms · 策略 '+r.mode+'<br>'+ (r.unitNote||'')+'<br>'+ seamTxt +'<br>'+
+    '灰阶均值 <span class="'+(midOK?'ok':'bad')+'">'+m.mean.toFixed(1)+'</span>'+
+    ' (应≈128) · std '+m.std.toFixed(1);
+}
+
+/** 32px 缩略图（快速版：只做灰度+高通+归一化，跳过高斯/淡出/量化） */
+function thumbField(v){
+  const TS=32;
+  const tmp=document.createElement('canvas');
+  tmp.width=tmp.height=TS;
+  const cx=tmp.getContext('2d',{willReadFrequently:true});
+  cx.clearRect(0,0,TS,TS);
+  cx.drawImage(v.img,0,0,TS,TS);
+  const src=cx.getImageData(0,0,TS,TS);
+  const g=[];
+  for(let y=0;y<TS;y++){const row=new Float64Array(TS);
+    for(let x=0;x<TS;x++){const i=(y*TS+x)*4;
+      row[x]=src.data[i]*0.299+src.data[i+1]*0.587+src.data[i+2]*0.114;}g.push(row);}
+  const base=boxBlur(g, Math.max(1,Math.round(v.p.hpR*TS/TILE)));
+  let mn=1e18,mx=-1e18,s=0,n=0;
+  const hp=[];
+  for(let y=0;y<TS;y++){const row=new Float64Array(TS);
+    for(let x=0;x<TS;x++){const v=g[y][x]-base[y][x]; row[x]=v; s+=v; n++;
+      if(v<mn)mn=v; if(v>mx)mx=v;} hp.push(row);}
+  const m=s/n, amp=Math.max(Math.abs(mn-m),Math.abs(mx-m))||1;
+  const out=cx.createImageData(TS,TS);
+  for(let y=0;y<TS;y++)for(let x=0;x<TS;x++){
+    const q=Math.max(0,Math.min(255,Math.round((hp[y][x]-m)/amp*0.5*255+128)));
+    const i=(y*TS+x)*4;
+    out.data[i]=out.data[i+1]=out.data[i+2]=q; out.data[i+3]=255;
+  }
+  return out;
+}
+
+function setPv(id,cvs){
+  const box=$(id); box.innerHTML='';
+  if(cvs) box.appendChild(cvs);
+  else box.innerHTML='<span style="color:var(--dim2)">—</span>';
+}
+
+function renderAll(){
+  renderList();
+  renderParams();
+  renderPreview();
+}
+
+/* ══════════════════════════════════════════════════════════════
+   导入
+   ══════════════════════════════════════════════════════════════ */
+function loadFiles(files){
+  const list=[...files].filter(f=>/^image\//.test(f.type));
+  if(!list.length){ showMsg('没有可用的图片','err'); return; }
+  let left=list.length;
+  list.forEach(f=>{
+    const fr=new FileReader();
+    fr.onload=()=>{
+      const img=new Image();
+      img.onload=()=>{
+        VARS.push(newVar(img, f.name.replace(/\.[^.]+$/,'').slice(0,24)));
+        if(--left===0){
+          CUR=VARS.length-1;
+          showMsg('已导入 '+list.length+' 张：'+list.map(f=>f.name).join('、'),'ok');
+          renderAll();
+        }
+      };
+      img.onerror=()=>{ if(--left===0)showMsg('有图片读不出来','err'); };
+      img.src=fr.result;
+    };
+    fr.readAsDataURL(f);
+  });
+}
+
+$('btnImport').onclick=()=>$('fileInput').click();
+$('fileInput').onchange=e=>{ loadFiles(e.target.files); e.target.value=''; };
+
+document.addEventListener('dragover',e=>{ e.preventDefault(); });
+document.addEventListener('drop',e=>{
+  e.preventDefault();
+  if(e.dataTransfer&&e.dataTransfer.files) loadFiles(e.dataTransfer.files);
+});
+
+$('btnReset').onclick=()=>{
+  if(CUR<0)return;
+  VARS[CUR].p=Object.assign({},DEFAULTS);
+  renderAll();
+  showMsg('已恢复默认参数','ok');
+};
+
+/* ══════════════════════════════════════════════════════════════
+   导出
+   ══════════════════════════════════════════════════════════════ */
+function toPng(v){
+  const cvs=fieldToImage(v.p && v.p.levels<64 ? quantize(fieldToImage(buildField(v.img,v.p).A), v.p.levels)
+                                              : buildField(v.img,v.p).A);
+  return cvs.toDataURL('image/png');
+}
+function download(url, name){
+  const a=document.createElement('a');
+  a.href=url; a.download=name;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+function slug(n){ return String(n).replace(/[^\w一-龥-]+/g,'_').slice(0,20); }
+
+$('btnSave1').onclick=()=>{
+  if(CUR<0){showMsg('先选一个素材','warn');return;}
+  const v=VARS[CUR];
+  download(toPng(v), slug(v.name)+'.png');
+  showMsg('已导出 '+v.name+'.png（256×256 灰度）','ok');
+};
+
+$('btnSave2').onclick=()=>{
+  if(!VARS.length){showMsg('没有素材可导出','warn');return;}
+  showMsg('正在打包…（会连续下载若干个文件）','ok');
+  // 1) 全部 PNG
+  VARS.forEach(v=>{ download(toPng(v), slug(v.name)+'.png'); });
+  // 2) tiles.js
+  const meta={};
+  VARS.forEach(v=>{
+    meta[slug(v.name)]={label:v.name, swing:1.0, scale:1.0, rot:0,
+                        kind:isVectorLike(v.img)?'vector':'photo'};
+  });
+  const lines=[
+'/* 熨烫织纹 tile —— 内联为 dataURL',
+' *',
+' * ⚠ 由 texture-editor.html 生成，内联而非外部 PNG 是因为：',
+' *   熨烫预览的像素级浮雕必须 getImageData 读像素，而 file:// 协议下',
+' *   加载任何外部图片都会把画布标记为 tainted → SecurityError。',
+' *',
+' * 粘贴回 data/iron-textures/tiles.js 后记得跑 node build.js。',
+' */',
+'window.IRON_ZAOJIN_TILES = {'
+  ];
+  VARS.forEach(v=>{
+    const b64=toPng(v).split(',')[1];
+    lines.push('  "'+slug(v.name)+'": "data:image/png;base64,'+b64+'",');
+  });
+  lines.push('};');
+  lines.push('/* 变体元数据 */');
+  lines.push('window.IRON_ZAOJIN_META = '+JSON.stringify(meta)+';');
+  const txt=lines.join('\n');
+  download(URL.createObjectURL(new Blob([txt],{type:'text/javascript;charset=utf-8'})), 'tiles.js');
+  setTimeout(()=>showMsg('已导出 '+VARS.length+' 张 PNG + tiles.js。把 tiles.js 放回 data/iron-textures/ 再 node build.js','ok'),1200);
+};
+</script>
+</body>
+</html>

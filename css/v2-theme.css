@@ -1,0 +1,834 @@
+/* ==========================================================================
+   v2-theme.css — 豆师傅 UI 视觉重制层
+   加载顺序：必须排在 style.*.min.css 之后
+   原则：只改视觉，不动结构；所有选择器都保留原 id/class 依赖
+   ========================================================================== */
+
+:root {
+    /* 品牌 */
+    --brand: #6C4CF1;
+    --brand-600: #5B3BE0;
+    --brand-50: #F2EFFF;
+    --accent: #F59E0B;
+
+    /* 中性 */
+    --ink: #111827;
+    --ink-2: #4B5563;
+    --ink-3: #9CA3AF;
+    --line: #E5E7EB;
+    --line-strong: #D1D5DB;
+    --surface: #FFFFFF;
+    --surface-2: #F7F8FA;
+    --surface-3: #F3F4F6;
+
+    /* 形状 */
+    --r-sm: 8px;
+    --r-md: 10px;
+    --r-lg: 14px;
+    --r-xl: 18px;
+
+    /* 阴影 */
+    --sh-1: 0 1px 2px rgba(17, 24, 39, .05);
+    --sh-2: 0 2px 8px rgba(17, 24, 39, .06), 0 1px 2px rgba(17, 24, 39, .04);
+    --sh-3: 0 12px 32px -8px rgba(17, 24, 39, .14), 0 2px 6px rgba(17, 24, 39, .05);
+    --sh-4: 0 24px 56px -16px rgba(17, 24, 39, .22), 0 4px 12px rgba(17, 24, 39, .06);
+
+    /* 动效 */
+    --ease: cubic-bezier(.22, .61, .36, 1);
+}
+
+/* ---------- 基础 ---------- */
+
+body {
+    background: var(--surface-2);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* 干掉整站那圈 4px 纯黑外框 */
+.container {
+    max-width: 1440px;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    padding: 0 24px 64px;
+}
+
+/* ---------- 顶栏 ---------- */
+
+header {
+    background: transparent;
+    padding: 0;
+}
+
+.header-content {
+    background: rgba(255, 255, 255, .82);
+    backdrop-filter: saturate(180%) blur(14px);
+    -webkit-backdrop-filter: saturate(180%) blur(14px);
+    border: 1px solid var(--line);
+    border-top: 0;
+    border-radius: 0 0 var(--r-lg) var(--r-lg);
+    box-shadow: var(--sh-1);
+    padding: 10px 16px;
+    margin: 0 -24px 28px;
+    position: sticky;
+    top: 0;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+
+.brand-title {
+    color: var(--ink);
+    font-size: 1.35rem;
+    font-weight: 800;
+    letter-spacing: -.025em;
+    margin: 0;
+}
+
+.brand-title::before {
+    content: "";
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    background: var(--brand);
+    margin-right: 8px;
+    vertical-align: 2px;
+    box-shadow: 0 0 0 3px var(--brand-50);
+}
+
+.version-badge {
+    color: var(--ink-3);
+    background: var(--surface-3);
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: .68rem;
+    font-weight: 600;
+    letter-spacing: .02em;
+}
+
+.header-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.nav-bar {
+    display: flex;
+    gap: 4px;
+    flex: 1;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.nav-bar::-webkit-scrollbar { display: none; }
+
+.nav-btn {
+    border: 0;
+    background: transparent;
+    color: var(--ink-2);
+    border-radius: 999px;
+    padding: 8px 14px;
+    font-size: .875rem;
+    font-weight: 600;
+    white-space: nowrap;
+    transition: background .16s var(--ease), color .16s var(--ease);
+}
+
+.nav-btn:hover {
+    background: var(--surface-3);
+    color: var(--ink);
+}
+
+.nav-btn.active {
+    background: var(--ink);
+    color: #fff;
+}
+
+/* 顶部那两颗内联渐变按钮（圆形拼豆 / 工作区）—— 收敛成描边态 */
+.nav-btn[style*="linear-gradient"] {
+    background: transparent !important;
+    color: var(--brand) !important;
+    box-shadow: inset 0 0 0 1px rgba(108, 76, 241, .32);
+}
+
+.nav-btn[style*="linear-gradient"]:hover {
+    background: var(--brand-50) !important;
+}
+
+.language-switch {
+    display: flex;
+    gap: 2px;
+    background: var(--surface-3);
+    border-radius: 999px;
+    padding: 3px;
+    flex-shrink: 0;
+}
+
+.lang-btn {
+    border: 0;
+    background: transparent;
+    color: var(--ink-2);
+    border-radius: 999px;
+    padding: 4px 12px;
+    font-size: .8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all .16s var(--ease);
+}
+
+.lang-btn.active {
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: var(--sh-1);
+}
+
+/* ---------- 首屏上传 ---------- */
+
+.upload-section {
+    padding: 8px 0 8px;
+}
+
+.upload-areas {
+    gap: 20px;
+}
+
+.upload-area {
+    border: 1.5px dashed var(--line-strong);
+    border-radius: var(--r-xl);
+    background: var(--surface);
+    padding: 56px 24px;
+    box-shadow: var(--sh-1);
+    transition: border-color .2s var(--ease), background .2s var(--ease),
+                transform .2s var(--ease), box-shadow .2s var(--ease);
+}
+
+.upload-area:hover {
+    border-color: var(--brand);
+    background: #FCFBFF;
+    transform: translateY(-2px);
+    box-shadow: var(--sh-3);
+}
+
+.upload-area.dragover {
+    border-color: var(--brand);
+    background: var(--brand-50);
+}
+
+.upload-icon {
+    font-size: 2.4rem;
+    line-height: 1;
+    width: 76px;
+    height: 76px;
+    margin: 0 auto 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 22px;
+    background: var(--surface-3);
+}
+
+.upload-area:hover .upload-icon {
+    background: var(--brand-50);
+}
+
+.upload-area > p:not(.upload-hint) {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--ink);
+    margin-bottom: 6px;
+}
+
+.upload-hint {
+    color: var(--ink-3);
+    font-size: .82rem;
+    line-height: 1.7;
+}
+
+/* ---------- 示例图纸 ---------- */
+
+.showcase-section {
+    padding: 40px 0 16px;
+}
+
+.showcase-grid {
+    gap: 16px;
+}
+
+.showcase-card,
+.showcase-item {
+    border-radius: var(--r-lg);
+    overflow: hidden;
+    border: 1px solid var(--line);
+    box-shadow: var(--sh-1);
+    transition: transform .2s var(--ease), box-shadow .2s var(--ease);
+}
+
+.showcase-card:hover,
+.showcase-item:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--sh-3);
+}
+
+/* ---------- 工作区卡片 ---------- */
+
+/* 4px 黑虚线 → 实线卡片 */
+.preview-section {
+    border: 1px solid var(--line);
+    border-radius: var(--r-xl);
+    background: var(--surface);
+    box-shadow: var(--sh-2);
+    padding: 20px;
+    gap: 24px;
+    margin-bottom: 24px;
+}
+
+.preview-panel {
+    background: transparent;
+    border-radius: var(--r-lg);
+    padding: 0;
+}
+
+.preview-panel h3 {
+    color: var(--ink);
+    font-size: .82rem;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-bottom: 14px;
+}
+
+/* 画布容器：像素工具惯例的棋盘格底 */
+.canvas-wrapper {
+    background-color: var(--surface-3);
+    background-image:
+        linear-gradient(45deg, #ECEEF1 25%, transparent 25%),
+        linear-gradient(-45deg, #ECEEF1 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #ECEEF1 75%),
+        linear-gradient(-45deg, transparent 75%, #ECEEF1 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    overflow: hidden;
+}
+
+.size-info {
+    color: var(--ink-3);
+    font-size: .78rem;
+    font-variant-numeric: tabular-nums;
+    margin-top: 8px;
+}
+
+/* 右侧控件列 */
+.controls-section {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    padding: 18px;
+}
+
+.control-group {
+    margin-bottom: 18px;
+}
+
+.control-group > label {
+    display: block;
+    font-size: .78rem;
+    font-weight: 700;
+    color: var(--ink-2);
+    margin-bottom: 8px;
+}
+
+/* 简单 / 高级 模式切换 */
+.mode-switch {
+    background: var(--surface-3);
+    border: 0;
+    border-radius: 999px;
+    padding: 4px;
+    gap: 2px;
+    width: max-content;
+    margin: 8px auto 24px;
+    display: flex;
+}
+
+.mode-btn {
+    border: 0;
+    background: transparent;
+    color: var(--ink-2);
+    border-radius: 999px;
+    padding: 7px 20px;
+    font-size: .82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all .16s var(--ease);
+}
+
+.mode-btn.active {
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: var(--sh-1);
+}
+
+/* ---------- 按钮体系 ---------- */
+
+.btn {
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    color: var(--ink);
+    font-size: .85rem;
+    font-weight: 600;
+    padding: 9px 16px;
+    box-shadow: var(--sh-1);
+    transition: all .16s var(--ease);
+}
+
+.btn:hover {
+    border-color: var(--ink-3);
+    background: var(--surface-2);
+}
+
+.btn:active {
+    transform: translateY(.5px);
+}
+
+.btn:focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+}
+
+.btn-primary {
+    background: var(--brand);
+    border-color: var(--brand);
+    color: #fff;
+    box-shadow: 0 1px 2px rgba(108, 76, 241, .3), 0 6px 16px -6px rgba(108, 76, 241, .5);
+}
+
+.btn-primary:hover {
+    background: var(--brand-600);
+    border-color: var(--brand-600);
+    color: #fff;
+}
+
+.btn-secondary {
+    background: var(--surface);
+    border-color: var(--line-strong);
+    color: var(--ink-2);
+}
+
+.btn-secondary:hover {
+    background: var(--surface-2);
+    color: var(--ink);
+}
+
+.btn-danger {
+    background: #FEF2F2;
+    border-color: #FECACA;
+    color: #DC2626;
+}
+
+/* 预设尺寸等小胶囊 */
+.preset-btn,
+.blank-size-btn {
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--ink-2);
+    font-size: .8rem;
+    font-weight: 600;
+    padding: 6px 14px;
+    cursor: pointer;
+    transition: all .16s var(--ease);
+}
+
+.preset-btn:hover,
+.blank-size-btn:hover {
+    border-color: var(--brand);
+    color: var(--brand);
+    background: var(--brand-50);
+}
+
+.preset-btn.active,
+.blank-size-btn.active {
+    background: var(--brand);
+    border-color: var(--brand);
+    color: #fff;
+}
+
+/* 编辑工具栏按钮 */
+.edit-tool-btn {
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    background: var(--surface);
+    color: var(--ink-2);
+    font-size: .78rem;
+    font-weight: 600;
+    padding: 7px 10px;
+    cursor: pointer;
+    transition: all .16s var(--ease);
+}
+
+.edit-tool-btn:hover {
+    border-color: var(--line-strong);
+    background: var(--surface-2);
+}
+
+.edit-tool-btn.active {
+    background: var(--brand-50);
+    border-color: var(--brand);
+    color: var(--brand);
+}
+
+/* ---------- 表单控件 ---------- */
+/* 注意：必须带 .container 前缀。旧样式里有 .control-group input、
+   .size-inputs input[type="number"]、.canvas-zoom-control input[type="range"]
+   这些 (0,2,1) 特异性的规则，裸选择器压不住。 */
+
+.container input[type="number"],
+.container input[type="text"],
+.container select {
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-sm);
+    background: var(--surface);
+    color: var(--ink);
+    font-size: .85rem;
+    padding: 8px 10px;
+    transition: border-color .16s var(--ease), box-shadow .16s var(--ease);
+    font-variant-numeric: tabular-nums;
+    box-shadow: none;
+}
+
+.container input[type="number"]:focus,
+.container input[type="text"]:focus,
+.container select:focus {
+    outline: 0;
+    border-color: var(--brand);
+    box-shadow: 0 0 0 3px rgba(108, 76, 241, .14);
+}
+
+.container input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    border: 0;
+    padding: 0;
+    border-radius: 999px;
+    background: var(--line);
+    cursor: pointer;
+    outline: 0;
+    box-shadow: none;
+}
+
+.container input[type="range"]::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 999px;
+    background: var(--line);
+    border: 0;
+}
+
+.container input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    margin-top: -6px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    box-shadow: var(--sh-2);
+    transition: transform .12s var(--ease), border-color .12s var(--ease);
+}
+
+.container input[type="range"]::-webkit-slider-thumb:hover {
+    transform: scale(1.12);
+    border-color: var(--brand);
+}
+
+.container input[type="range"]::-moz-range-thumb {
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    box-shadow: var(--sh-2);
+}
+
+/* 缩放滑块单独兜底：它被 .canvas-zoom-control 的旧规则吃住了 */
+.container .canvas-zoom-control input[type="range"] {
+    -webkit-appearance: none !important;
+    appearance: none !important;
+    width: 100%;
+    height: 4px !important;
+    background: var(--line) !important;
+    border-radius: 999px;
+    margin-top: 6px;
+}
+
+.container .canvas-zoom-control input[type="range"]::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 999px;
+    background: var(--line);
+}
+
+.container .canvas-zoom-control input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none !important;
+    appearance: none !important;
+    width: 16px;
+    height: 16px;
+    margin-top: -6px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    box-shadow: var(--sh-2);
+}
+
+/* 取色器：默认黑块太丑，做成带描边的圆角色块 */
+.container input[type="color"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 44px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-sm);
+    background: var(--surface);
+    cursor: pointer;
+    box-shadow: var(--sh-1);
+}
+
+.container input[type="color"]::-webkit-color-swatch-wrapper {
+    padding: 3px;
+}
+
+.container input[type="color"]::-webkit-color-swatch {
+    border: 0;
+    border-radius: 5px;
+}
+
+.container input[type="color"]::-moz-color-swatch {
+    border: 0;
+    border-radius: 5px;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+    accent-color: var(--brand);
+    width: 15px;
+    height: 15px;
+    cursor: pointer;
+}
+
+.checkbox-label,
+.checkbox-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: .82rem;
+    color: var(--ink-2);
+    cursor: pointer;
+}
+
+/* ---------- 浮动面板 ---------- */
+
+.floating-panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    box-shadow: var(--sh-4);
+    overflow: hidden;
+}
+
+.floating-panel-header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+    padding: 12px 14px;
+    font-size: .82rem;
+    font-weight: 700;
+    color: var(--ink);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.floating-panel-close {
+    border: 0;
+    background: transparent;
+    color: var(--ink-3);
+    font-size: 1.15rem;
+    line-height: 1;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all .14s var(--ease);
+}
+
+.floating-panel-close:hover {
+    background: var(--surface-3);
+    color: var(--ink);
+}
+
+.floating-panel-body {
+    padding: 14px;
+}
+
+/* 悬浮快照按钮 / 面板 */
+.snapshot-float-btn {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: var(--sh-3);
+    color: var(--ink-2);
+    transition: all .16s var(--ease);
+}
+
+.snapshot-float-btn:hover {
+    color: var(--brand);
+    border-color: var(--brand);
+}
+
+.snapshot-panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    box-shadow: var(--sh-4);
+}
+
+/* ---------- 弹窗 ---------- */
+
+.modal-content {
+    border: 1px solid var(--line);
+    border-radius: var(--r-xl);
+    box-shadow: var(--sh-4);
+    background: var(--surface);
+    overflow: hidden;
+}
+
+.modal-header {
+    border-bottom: 1px solid var(--line);
+    padding: 16px 20px;
+}
+
+.modal-header h2 {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--ink);
+}
+
+.modal-body {
+    padding: 20px;
+}
+
+.modal-footer {
+    border-top: 1px solid var(--line);
+    padding: 14px 20px;
+    background: var(--surface-2);
+    gap: 10px;
+}
+
+.close-btn {
+    border: 0;
+    background: transparent;
+    color: var(--ink-3);
+    font-size: 1.3rem;
+    line-height: 1;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all .14s var(--ease);
+}
+
+.close-btn:hover {
+    background: var(--surface-3);
+    color: var(--ink);
+}
+
+/* ---------- 滚动条 ---------- */
+
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #D8DBE1;
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #B9BEC8;
+    background-clip: content-box;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+/* ---------- 响应式 ---------- */
+
+@media (max-width: 900px) {
+    body { overflow-x: hidden; }
+
+    .container {
+        padding: 0 12px 40px;
+    }
+
+    /* 顶栏两行：品牌 + 语言 / 导航独占一行横向滚动 */
+    .header-content {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        grid-template-areas:
+            "brand lang"
+            "nav nav";
+        gap: 8px 10px;
+        margin: 0 -12px 18px;
+        padding: 10px 12px;
+        border-radius: 0 0 var(--r-lg) var(--r-lg);
+    }
+
+    .header-title { grid-area: brand; }
+    .language-switch { grid-area: lang; justify-self: end; }
+    .nav-bar { grid-area: nav; gap: 2px; padding-bottom: 2px; }
+    .nav-btn { padding: 7px 11px; font-size: .8rem; }
+
+    .brand-title { font-size: 1.15rem; }
+
+    .upload-areas {
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .upload-area {
+        min-height: 170px;
+        padding: 28px 16px;
+    }
+
+    .upload-icon {
+        width: 58px;
+        height: 58px;
+        font-size: 1.8rem;
+        border-radius: 18px;
+        margin-bottom: 12px;
+    }
+
+    .upload-area > p:not(.upload-hint) { font-size: .95rem; }
+    .upload-hint { font-size: .78rem; line-height: 1.65; }
+
+    .preview-section {
+        padding: 14px;
+        gap: 14px;
+    }
+
+    .controls-section { padding: 14px; }
+    .mode-switch { margin: 4px auto 18px; }
+}

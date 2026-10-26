@@ -1,0 +1,29 @@
+node_modules/
+
+.DS_Store
+Thumbs.db
+
+.vscode/
+.idea/
+.trae/
+.workbuddy/
+*.swp
+*.swo
+*~
+
+npm-debug.log
+yarn-error.log
+*.log
+
+.env
+.env.local
+.env.*.local
+
+# 本地管理工具（不随仓库发布）
+sample-manager.html
+sample-server.js
+启动管理服务器.bat
+
+# 清理隔离区（历史遗留，勿入库）
+_trash*/
+_*隔离区*/

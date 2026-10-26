@@ -1,0 +1,20 @@
+# 行尾统一为 LF。
+# 理由：v1 的 bundle 文件名取的是源码内容 md5，EOL 一漂 hash 就对不上，
+# 缓存失效、线上新旧版本混跑都从这里开始。v2 从第一天锁死。
+* text=auto eol=lf
+
+# Windows 批处理必须 CRLF，否则 cmd 解析会出问题
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>拼豆图纸生成器</title>
+    <meta name="description" content="把任意图片变成可以照着拼的拼豆图纸。裁切、像素化、配色映射、自由编辑，一次走完。">
+    <link rel="stylesheet" href="css/app.css">
+    <link rel="stylesheet" href="css/home.css">
+</head>
+
+<body class="home">
+
+    <header class="topbar home-topbar">
+        <div class="topbar-brand">
+            <span class="brand-mark">拼</span>
+            <span>拼豆图纸</span>
+        </div>
+        <div class="topbar-spacer"></div>
+        <a class="btn btn-ghost btn-sm" href="editor.html?demo=1">打开示例</a>
+    </header>
+
+    <main class="home-main">
+        <div class="home-glow" aria-hidden="true"></div>
+
+        <div class="home-content">
+            <h1 class="home-title">把一张图<br>变成能照着拼的图纸</h1>
+
+            <p class="home-sub">
+                裁切 · 像素化 · 配色 · 自由编辑
+            </p>
+
+            <a class="home-cta" href="create.html">
+                <span>去做图</span>
+                <svg width="17" height="17" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+            </a>
+
+            <p class="home-note">支持 JPG / PNG / WebP，本地处理，图片不上传</p>
+        </div>
+
+        <div class="home-deco" aria-hidden="true">
+            <span style="--i:0"></span><span style="--i:1"></span><span style="--i:2"></span>
+            <span style="--i:3"></span><span style="--i:4"></span><span style="--i:5"></span>
+            <span style="--i:6"></span><span style="--i:7"></span><span style="--i:8"></span>
+        </div>
+    </main>
+
+</body>
+
+</html>

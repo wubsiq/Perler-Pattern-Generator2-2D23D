@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>画布 · 拼豆图纸</title>
+    <link rel="stylesheet" href="css/app.css">
+    <link rel="stylesheet" href="css/editor.css">
+</head>
+
+<body class="editor">
+
+    <header class="topbar ed-topbar">
+        <a class="topbar-brand" href="index.html" title="回到首页">
+            <span class="brand-mark">拼</span>
+        </a>
+
+        <div class="ed-doc">
+            <input class="ed-doc-name" id="docName" value="未命名图纸" spellcheck="false" aria-label="图纸名称">
+            <span class="ed-doc-meta" id="docMeta">—</span>
+        </div>
+
+        <div class="topbar-spacer"></div>
+
+        <nav class="ed-actions">
+            <button class="btn btn-sm" id="btnHistory" type="button">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2.4 8a5.6 5.6 0 105.6-5.6c-1.7 0-3.2.8-4.2 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M2 2.6v3.2h3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 5.4V8l1.9 1.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                <span>历史</span>
+            </button>
+
+            <button class="btn btn-sm" id="btnExportInfo" type="button">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 1.8v8.4M4.8 7l3.2 3.2L11.2 7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.4 11.4v1.4a1.4 1.4 0 001.4 1.4h8.4a1.4 1.4 0 001.4-1.4v-1.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                <span>导出信息</span>
+            </button>
+
+            <button class="btn btn-sm" id="btnSave" type="button">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2.4h8l2.6 2.6v8.6H3V2.4z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.4 2.4v3.6h5.2V2.4M5.4 13.6V9.4h5.2v4.2" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+                <span>保存</span>
+            </button>
+
+            <button class="btn btn-sm" id="btnIron" type="button">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3.4 10.6h9.2c0-3.4-1.6-5.6-4.6-5.6S3.4 7.2 3.4 10.6z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M2 12.8h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M8 2v1.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                <span>预览成品</span>
+            </button>
+
+            <button class="btn btn-primary btn-sm" id="btnDownload" type="button">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2v7.4M5 6.6L8 9.6l3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.6 12.2h10.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                <span>下载图纸</span>
+            </button>
+        </nav>
+    </header>
+
+    <main class="ed-main">
+
+        <!-- 工具栏（左侧导轨）：只放工具，属性/统计在右侧次面板 -->
+        <aside class="ed-tools" id="toolbar">
+            <button class="tool-toggle" id="toolToggle" type="button" title="展开工具名">
+                <svg class="tool-toggle-chev" width="15" height="15" viewBox="0 0 16 16" fill="none">
+                    <path d="M6 3.6L10.4 8 6 12.4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+            </button>
+
+            <div class="tool-scroll">
+                <div class="tool-section" id="toolSection"></div>
+            </div>
+
+            <div class="tool-foot">
+                <button class="undo-btn" id="btnUndo" type="button" title="撤销 (Ctrl+Z)">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 7.4h6.4a3.6 3.6 0 010 7.2H6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M5.6 4L2.6 7.4l3 3.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    <span>撤销</span>
+                </button>
+                <button class="undo-btn" id="btnRedo" type="button" title="重做 (Ctrl+Y)">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M13 7.4H6.6a3.6 3.6 0 000 7.2H10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M10.4 4l3 3.4-3 3.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    <span>重做</span>
+                </button>
+            </div>
+        </aside>
+
+        <!-- 画布 -->
+        <div class="ed-viewport" id="viewport">
+            <canvas id="board"></canvas>
+
+            <!-- 画布尺寸手柄：跟着图纸走，拖四边/四角改格子数 -->
+            <div class="ed-board-frame" id="boardFrame">
+                <i class="bf-h bf-n" data-side="n"></i>
+                <i class="bf-h bf-s" data-side="s"></i>
+                <i class="bf-h bf-w" data-side="w"></i>
+                <i class="bf-h bf-e" data-side="e"></i>
+                <i class="bf-h bf-nw" data-side="nw"></i>
+                <i class="bf-h bf-ne" data-side="ne"></i>
+                <i class="bf-h bf-sw" data-side="sw"></i>
+                <i class="bf-h bf-se" data-side="se"></i>
+                <span class="bf-badge" id="bfBadge">29 × 29</span>
+            </div>
+
+            <div class="ed-hud ed-hud-left">
+                <div class="ed-zoom">
+                    <button class="hud-btn" id="zoomOut" title="缩小">−</button>
+                    <span class="ed-zoom-val" id="zoomVal">100%</span>
+                    <button class="hud-btn" id="zoomIn" title="放大">+</button>
+                    <span class="hud-sep"></span>
+                    <button class="hud-btn hud-btn-text" id="zoomFit" title="适应窗口">适应</button>
+                </div>
+            </div>
+
+            <div class="ed-hud ed-hud-right">
+                <span class="ed-hint" id="edHint">滚轮缩放 · 空格拖动 · B 画笔 R 剃刀 G 填充 I 取色</span>
+            </div>
+        </div>
+
+        <!-- 次面板（右侧）：默认图纸统计，选中工具时变成该工具属性 -->
+        <aside class="ed-insp" id="inspector">
+            <header class="insp-head">
+                <div class="insp-tabs" id="inspTabs">
+                    <button class="insp-tab" data-tab="props" type="button">工具属性</button>
+                    <button class="insp-tab is-active" data-tab="stats" type="button">图纸统计</button>
+                </div>
+                <button class="insp-fold" id="inspFold" type="button" title="收起次面板">
+                    <svg class="insp-fold-chev" width="15" height="15" viewBox="0 0 16 16" fill="none">
+                        <path d="M6 3.6L10.4 8 6 12.4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                </button>
+            </header>
+
+            <div class="insp-body">
+                <!-- 当前工具 / 命令的属性 -->
+                <div class="insp-view" id="viewProps" hidden>
+
+                    <!-- 有选区时的通用操作 -->
+                    <div class="sel-bar" id="selBar" hidden>
+                        <div class="sel-top">
+                            <span class="sel-info" id="selInfo">—</span>
+                            <span class="sel-scope" id="selScope">仅选区内</span>
+                        </div>
+                        <div class="sel-acts">
+                            <button class="mini-btn" data-sel="fill" type="button" title="用当前颜色填满选区">填充</button>
+                            <button class="mini-btn" data-sel="clear" type="button" title="清空选区内所有格子">清空</button>
+                            <button class="mini-btn" data-sel="crop" type="button" title="把画布裁剪到选区">裁剪</button>
+                            <button class="mini-btn" data-sel="none" type="button" title="取消选区">取消</button>
+                        </div>
+                    </div>
+
+                    <!-- 笔迹：画笔 / 剃刀 共用 -->
+                    <section class="ip-sec" data-panel="brush razor chainRazor">
+                        <div class="ip-title">笔迹</div>
+
+                        <div class="tp-row">
+                            <span class="tp-label">大小</span>
+                            <input class="tp-input" type="number" id="brushSize" value="1" min="1" max="20">
+                        </div>
+
+                        <div class="tp-row">
+                            <span class="tp-label">形状</span>
+                            <div class="tp-flip" id="brushShape">
+                                <button class="mini-btn is-on" data-shape="square" type="button" title="方块">■</button>
+                                <button class="mini-btn" data-shape="round" type="button" title="圆形">●</button>
+                                <button class="mini-btn" data-shape="cross" type="button" title="十字">＋</button>
+                            </div>
+                        </div>
+
+                        <div class="tp-row" data-when="razor chainRazor">
+                            <span class="tp-label">擦除后</span>
+                            <div class="ip-color ip-color-pick" id="eraseColorChip" role="button" tabindex="0" title="点一下改「空格底色」">
+                                <span class="ip-color-dot" id="eraseColorDot"></span>
+                                <span class="ip-color-code" id="eraseColorCode">#FFFFFF</span>
+                                <input type="color" id="emptyColorPip" value="#ffffff" tabindex="-1">
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- 画笔：本地笔刷库（原「画笔管理」并入这里） -->
+                    <section class="ip-sec" data-panel="brush">
+                        <div class="ip-title">笔刷库 · 本地</div>
+                        <div class="brush-lib" id="brushLibList"></div>
+                        <button class="cmd-ghost" id="btnBrushSave" type="button">＋ 把当前笔迹存为笔刷</button>
+                    </section>
+
+                    <!-- 选区工具 -->
+                    <section class="ip-sec" data-panel="select">
+                        <div class="ip-title">选区</div>
+
+                        <div class="tp-row tp-row-wide">
+                            <span class="tp-label">形状</span>
+                            <div class="tp-flip sel-shapes" id="selShape">
+                                <button class="mini-btn is-on" data-shape="rect" type="button" title="拖出矩形">矩形</button>
+                                <button class="mini-btn" data-shape="lasso" type="button" title="按住随手画圈">套索</button>
+                                <button class="mini-btn" data-shape="smudge" type="button" title="涂抹：划到哪选到哪">涂抹</button>
+                                <button class="mini-btn" data-shape="polygon" type="button" title="逐点连接，双击闭合">多边形</button>
+                            </div>
+                        </div>
+
+                        <div class="tp-row tp-row-wide">
+                            <span class="tp-label">方式</span>
+                            <div class="tp-flip sel-shapes sel-ops" id="selOps">
+                                <button class="mini-btn is-on" data-op="new" type="button" title="新选区：替换掉原来的选区">新建</button>
+                                <button class="mini-btn" data-op="add" type="button" title="加选：Shift + 拖">加选</button>
+                                <button class="mini-btn" data-op="sub" type="button" title="减选：Alt + 拖">减选</button>
+                                <button class="mini-btn" data-op="inter" type="button" title="交集：Shift + Alt + 拖">交集</button>
+                            </div>
+                        </div>
+
+                        <div class="tp-row" id="selSmudgeRow" hidden>
+                            <span class="tp-label">笔宽</span>
+                            <input class="cmd-range" type="range" id="selSmudge" min="1" max="6" step="1" value="3">
+                        </div>
+
+                        <div class="sel-stat" id="selStat">还没有选区</div>
+
+                        <div class="tp-flip sel-quick">
+                            <button class="mini-btn" data-selact="all" type="button" title="全选整张画布">全选</button>
+                            <button class="mini-btn" data-selact="invert" type="button" title="选中选区以外的地方">反选</button>
+                            <button class="mini-btn" data-selact="none" type="button" title="取消选区">取消</button>
+                            <button class="mini-btn" data-selact="close" id="selClose" type="button" hidden>闭合</button>
+                        </div>
+
+                        <p class="cmd-hint">选区存在时，画笔 / 剃刀 / 填充 / 命令都只作用在选区内。</p>
+
+                        <details class="ip-more">
+                            <summary>快捷键与更多规则</summary>
+                            <p class="cmd-hint">
+                                <span class="hint-mod">按住 <b>Shift</b> 拖＝加选，<b>Alt</b> 拖＝减选，<b>Shift+Alt</b>＝交集，还能拖到一半再按。<br>
+                                <b>Ctrl+A</b> 全选 · <b>Ctrl+Shift+I</b> 反选 · <b>Ctrl+D</b> 取消 · <b>Delete</b> 清内容<br></span>
+                                多边形：连点顶点，双击或点回起点闭合。
+                            </p>
+                        </details>
+                    </section>
+
+                    <!-- 填充 -->
+                    <section class="ip-sec" data-panel="fill">
+                        <div class="ip-title">填充</div>
+                        <div class="tp-row">
+                            <span class="tp-label">填充颜色</span>
+                            <button class="ip-color" id="fillColorChip" type="button" title="点下方色卡换色">
+                                <span class="ip-color-dot" id="fillColorDot"></span>
+                                <span class="ip-color-code" id="fillColorCode">—</span>
+                            </button>
+                        </div>
+                        <p class="cmd-hint">点一下，填满相连的同色区域。</p>
+                    </section>
+
+                    <!-- 取色器 -->
+                    <section class="ip-sec" data-panel="picker">
+                        <div class="ip-title">取色器</div>
+                        <p class="cmd-hint">点画布上任意格子，把它设为当前颜色。</p>
+                    </section>
+
+                    <!-- ============ 画布：尺寸 / 底色 / 翻转 ============ -->
+                    <section class="ip-sec" data-panel="cmd:canvas">
+                        <div class="ip-title">画布尺寸</div>
+
+                        <div class="size-row">
+                            <label class="size-field">
+                                <span>宽</span>
+                                <input class="tp-input" type="number" id="sizeCols" min="5" max="200" step="1" inputmode="numeric">
+                            </label>
+                            <span class="size-x">×</span>
+                            <label class="size-field">
+                                <span>高</span>
+                                <input class="tp-input" type="number" id="sizeRows" min="5" max="200" step="1" inputmode="numeric">
+                            </label>
+                            <span class="size-unit">格</span>
+                        </div>
+
+                        <div class="size-meta" id="sizeMeta">—</div>
+
+                        <div class="tp-row tp-row-wide">
+                            <span class="tp-label">常用</span>
+                            <div class="tp-flip size-presets" id="sizePresets">
+                                <button class="mini-btn" data-size="14" type="button">14</button>
+                                <button class="mini-btn" data-size="29" type="button">29</button>
+                                <button class="mini-btn" data-size="48" type="button">48</button>
+                                <button class="mini-btn" data-size="57" type="button">57</button>
+                            </div>
+                        </div>
+
+                        <p class="cmd-hint">直接拖画布四边或四角的紫色把手，也能改大小；往左/往上拖是从另一侧长出来的。</p>
+
+                        <div class="ip-title ip-title-gap">底色与方向</div>
+                        <div class="tp-row">
+                            <span class="tp-label" title="擦掉 / 删掉的格子按这个颜色显示，导出时仍算空格">空格底色</span>
+                            <input class="color-well tp-color" type="color" id="emptyColor" value="#ffffff">
+                        </div>
+                        <div class="tp-row">
+                            <span class="tp-label">整图翻转</span>
+                            <div class="tp-flip">
+                                <button class="mini-btn" data-flip="h" type="button" title="左右翻转">↔</button>
+                                <button class="mini-btn" data-flip="v" type="button" title="上下翻转">↕</button>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- ============ 命令：颜色转换 ============ -->
+                    <section class="ip-sec" data-panel="cmd:colorConvert">
+                        <div class="ip-title">颜色转换</div>
+
+                        <div class="tp-row">
+                            <span class="tp-label">源颜色</span>
+                            <button class="ip-color" id="ccFromChip" type="button">
+                                <span class="ip-color-dot" id="ccFromDot"></span>
+                                <span class="ip-color-code" id="ccFromCode">未选</span>
+                            </button>
+                        </div>
+                        <div class="cmd-swatches" id="ccSwatches"></div>
+
+                        <div class="tp-row">
+                            <span class="tp-label">换成</span>
+                            <button class="ip-color" id="ccToChip" type="button" title="点下方色卡换色">
+                                <span class="ip-color-dot" id="ccToDot"></span>
+                                <span class="ip-color-code" id="ccToCode">—</span>
+                            </button>
+                        </div>
+
+                        <div class="tp-row">
+                            <span class="tp-label">范围</span>
+                            <div class="tp-flip" data-scope-group="cc">
+                                <button class="mini-btn is-on" data-scope="all" type="button">全图</button>
+                                <button class="mini-btn" data-scope="sel" type="button">选区</button>
+                            </div>
+                        </div>
+
+                        <p class="cmd-stat" id="ccStat">先选源颜色</p>
+                        <button class="cmd-run" id="ccRun" type="button">转换</button>
+                        <p class="cmd-hint">把源颜色的所有格子统一换成目标颜色，形状不变。</p>
+                    </section>
+
+                    <!-- ============ 命令：颜色剔除 ============ -->
+                    <section class="ip-sec" data-panel="cmd:colorRemove">
+                        <div class="ip-title">颜色剔除</div>
+
+                        <div class="tp-row">
+                            <span class="tp-label">要剔除</span>
+                            <button class="ip-color" id="crFromChip" type="button">
+                                <span class="ip-color-dot" id="crFromDot"></span>
+                                <span class="ip-color-code" id="crFromCode">未选</span>
+                            </button>
+                        </div>
+                        <div class="cmd-swatches" id="crSwatches"></div>
+
+                        <div class="tp-row">
+                            <span class="tp-label">范围</span>
+                            <div class="tp-flip" data-scope-group="cr">
+                                <button class="mini-btn is-on" data-scope="all" type="button">全图</button>
+                                <button class="mini-btn" data-scope="sel" type="button">选区</button>
+                            </div>
+                        </div>
+
+                        <p class="cmd-stat" id="crStat">先选要剔除的颜色</p>
+                        <button class="cmd-run" id="crRun" type="button">剔除</button>
+                        <p class="cmd-hint">选中的颜色全部变成空格，其他颜色不动。</p>
+                    </section>
+
+                    <!-- ============ 命令：颜色量化 ============ -->
+                    <section class="ip-sec" data-panel="cmd:quantize">
+                        <div class="ip-title">颜色量化</div>
+
+                        <div class="tp-row">
+                            <span class="tp-label">当前</span>
+                            <b class="cmd-val" id="qNow">—</b>
+                        </div>
+
+                        <div class="tp-row">
+                            <span class="tp-label">保留</span>
+                            <input class="cmd-range" type="range" id="qN" min="2" max="24" step="1" value="12">
+                            <b class="cmd-val" id="qNVal">12 色</b>
+                        </div>
+
+                        <div class="cmd-presets" id="qPresets">
+                            <button class="mini-btn" data-n="6" type="button">6</button>
+                            <button class="mini-btn" data-n="8" type="button">8</button>
+                            <button class="mini-btn is-on" data-n="12" type="button">12</button>
+                            <button class="mini-btn" data-n="16" type="button">16</button>
+                            <button class="mini-btn" data-n="24" type="button">24</button>
+                        </div>
+
+                        <p class="cmd-stat" id="qStat">—</p>
+                        <button class="cmd-run" id="qRun" type="button">量化</button>
+                        <p class="cmd-hint">保留用量最多的 N 色，其余按 CIEDE2000 色差就近合并。</p>
+                    </section>
+
+                    <!-- ============ 命令：杂色过滤 ============ -->
+                    <section class="ip-sec" data-panel="cmd:noise">
+                        <div class="ip-title">杂色过滤</div>
+
+                        <div class="tp-row tp-row-wide">
+                            <span class="tp-label">低频色</span>
+                            <span class="cmd-inline">
+                                全图少于 <input class="tp-input" type="number" id="nMax" value="3" min="1" max="30"> 颗
+                            </span>
+                        </div>
+
+                        <div class="tp-row tp-row-wide">
+                            <span class="tp-label">孤立度</span>
+                            <span class="cmd-inline">
+                                同色邻居 <input class="cmd-range" type="range" id="nSame" min="0" max="50" step="5" value="25">
+                                <b class="cmd-val" id="nSameVal">&lt;25%</b>
+                            </span>
+                        </div>
+
+                        <p class="cmd-stat" id="nStat">—</p>
+                        <button class="cmd-run" id="nRun" type="button">过滤</button>
+                        <p class="cmd-hint">把稀疏颜色的孤立格子，并入周围最多的那个颜色。</p>
+                    </section>
+
+                    <!-- ============ 命令：描边 ============ -->
+                    <section class="ip-sec" data-panel="cmd:outline">
+                        <div class="ip-title">描边</div>
+
+                        <div class="tp-row">
+                            <span class="tp-label">描边颜色</span>
+                            <button class="ip-color" id="olColorChip" type="button" title="点下方色卡换色">
+                                <span class="ip-color-dot" id="olColorDot"></span>
+                                <span class="ip-color-code" id="olColorCode">—</span>
+                            </button>
+                        </div>
+
+                        <div class="tp-row">
+                            <span class="tp-label">方向</span>
+                            <div class="tp-flip" id="olDir">
+                                <button class="mini-btn is-on" data-dir="out" type="button">外描边</button>
+                                <button class="mini-btn" data-dir="in" type="button">内描边</button>
+                            </div>
+                        </div>
+
+                        <div class="tp-row">
+                            <span class="tp-label">粗细</span>
+                            <div class="tp-flip" id="olWidth">
+                                <button class="mini-btn is-on" data-w="1" type="button">1</button>
+                                <button class="mini-btn" data-w="2" type="button">2</button>
+                                <button class="mini-btn" data-w="3" type="button">3</button>
+                            </div>
+                        </div>
+
+                        <div class="tp-row">
+                            <span class="tp-label">对角</span>
+                            <label class="cmd-check"><input type="checkbox" id="olDiag"> 包含斜角</label>
+                        </div>
+
+                        <div class="tp-row">
+                            <span class="tp-label">范围</span>
+                            <div class="tp-flip" data-scope-group="ol">
+                                <button class="mini-btn is-on" data-scope="all" type="button">全图</button>
+                                <button class="mini-btn" data-scope="sel" type="button">选区</button>
+                            </div>
+                        </div>
+
+                        <p class="cmd-stat" id="olStat">—</p>
+                        <button class="cmd-run" id="olRun" type="button">描边</button>
+                        <p class="cmd-hint">外描边沿图形外缘加一圈，内描边把图形边缘染色。</p>
+                    </section>
+
+                    <!-- ============ 命令：画布边界 ============ -->
+                    <section class="ip-sec" data-panel="cmd:bounds">
+                        <div class="ip-title">画布边界</div>
+
+                        <div class="tp-row">
+                            <span class="tp-label">留白</span>
+                            <span class="cmd-inline">
+                                <input class="tp-input" type="number" id="bdPad" value="0" min="0" max="10"> 格
+                            </span>
+                        </div>
+
+                        <p class="cmd-stat" id="bdStat">—</p>
+                        <button class="cmd-run" id="bdRun" type="button">裁剪到内容</button>
+                        <p class="cmd-hint">去掉四周空白，只留图形外框加指定留白。</p>
+                    </section>
+
+                    <p class="insp-tip" id="propsTip"></p>
+                </div>
+
+                <!-- 图纸统计 -->
+                <div class="insp-view" id="viewStats">
+                    <div class="stat-cards" id="statCards"></div>
+
+                    <div class="stat-head">
+                        <span>颜色用量</span>
+                        <button class="stat-clear" id="focusClear" type="button" hidden>取消提亮</button>
+                    </div>
+                    <div class="stat-list" id="statList"></div>
+                    <p class="insp-tip">点一个颜色，画布上只亮这一色</p>
+                </div>
+            </div>
+
+            <div class="tool-colors" id="toolColors">
+                <div class="tc-current">
+                    <span class="tc-swatch" id="currentSwatch"></span>
+                    <div class="tc-info">
+                        <b id="currentCode">—</b>
+                        <span id="currentHex">点色块选色</span>
+                    </div>
+                    <button class="tc-more" id="tcMore" type="button" title="展开 / 收起色卡">
+                        <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M4 6.4L8 10.4l4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </button>
+                </div>
+
+                <input class="tc-search" id="colorSearch" type="text" placeholder="输入编号搜索…" spellcheck="false">
+                <div class="tc-series" id="colorSeries"></div>
+                <div class="tc-grid" id="colorGrid"></div>
+            </div>
+
+            <!-- 收起态：只留一条色块，按用量从多到少 -->
+            <div class="insp-strip" id="inspStrip" hidden>
+                <div class="strip-list" id="stripList"></div>
+            </div>
+        </aside>
+
+
+        <!-- 图纸参数抽屉 -->
+        <section class="ed-drawer" id="drawer" hidden>
+            <header class="dr-head">
+                <h2 id="drawerTitle">下载拼豆图纸</h2>
+                <button class="dr-close" id="drawerClose" type="button" aria-label="关闭">✕</button>
+            </header>
+
+            <div class="dr-body">
+                <div class="dr-group">
+                    <span class="dr-group-title">输出</span>
+
+                    <label class="dr-row">
+                        <span>单个豆子尺寸</span>
+                        <span class="dr-inline">
+                            <input class="range" type="range" id="optBead" min="10" max="60" step="1" value="30">
+                            <input class="input dr-num" type="number" id="optBeadNum" min="10" max="60" value="30">
+                            <em>px</em>
+                        </span>
+                    </label>
+
+                    <label class="dr-row">
+                        <span>图纸样式</span>
+                        <select class="select" id="optStyle">
+                            <option value="color">彩色图纸</option>
+                            <option value="color-code" selected>彩色 + 色号</option>
+                            <option value="symbol">黑白符号</option>
+                        </select>
+                    </label>
+
+                    <label class="dr-row">
+                        <span>拼豆形状</span>
+                        <select class="select" id="optShape">
+                            <option value="square">正方形</option>
+                            <option value="round-square" selected>圆角方块</option>
+                            <option value="ring">圆珠</option>
+                        </select>
+                    </label>
+
+                    <label class="dr-row">
+                        <span>颜色统计位置</span>
+                        <select class="select" id="optLegend">
+                            <option value="bottom" selected>图纸下方</option>
+                            <option value="side">图纸右侧</option>
+                            <option value="wrap">环绕图纸</option>
+                            <option value="none">不显示</option>
+                        </select>
+                    </label>
+
+                    <label class="dr-row">
+                        <span>透明格颜色</span>
+                        <input class="color-well" type="color" id="optEmptyColor" value="#ffffff">
+                    </label>
+                </div>
+
+                <div class="dr-group">
+                    <span class="dr-group-title">网格与坐标</span>
+
+                    <label class="dr-check">
+                        <input type="checkbox" id="optGrid" checked>
+                        <span>显示网格线</span>
+                        <input class="color-well dr-mini-color" type="color" id="optGridColor" value="#9aa0aa">
+                    </label>
+
+                    <label class="dr-row dr-row-tight">
+                        <span>网格线粗度</span>
+                        <input class="range" type="range" id="optGridWidth" min="0.5" max="4" step="0.5" value="1">
+                    </label>
+
+                    <label class="dr-check">
+                        <input type="checkbox" id="optCoords" checked>
+                        <span>显示坐标数字</span>
+                        <input class="color-well dr-mini-color" type="color" id="optCoordColor" value="#000000">
+                    </label>
+
+                    <label class="dr-check">
+                        <input type="checkbox" id="optBigGrid">
+                        <span>显示大格子线</span>
+                        <input class="color-well dr-mini-color" type="color" id="optBigGridColor" value="#8B4513">
+                    </label>
+
+                    <label class="dr-row dr-row-tight">
+                        <span>大格子大小</span>
+                        <span class="dr-inline">
+                            每 <input class="input dr-num" type="number" id="optBigGridSize" min="2" max="20" value="5"> 格
+                        </span>
+                    </label>
+
+                    <label class="dr-row dr-row-tight">
+                        <span>大格子线粗度</span>
+                        <input class="range" type="range" id="optBigGridWidth" min="1" max="5" step="0.5" value="2">
+                    </label>
+                </div>
+
+                <div class="dr-group">
+                    <span class="dr-group-title">其他</span>
+                    <label class="dr-row">
+                        <span>水印文本</span>
+                        <input class="input" type="text" id="optWatermark" placeholder="留空则不显示">
+                    </label>
+                </div>
+            </div>
+
+            <footer class="dr-foot">
+                <button class="btn" id="drawerCancel" type="button">取消</button>
+                <button class="btn btn-primary" id="drawerConfirm" type="button">生成并下载</button>
+            </footer>
+        </section>
+
+        <!-- 操作历史 -->
+        <section class="ed-sheet" id="historySheet" hidden>
+            <header class="dr-head">
+                <h2>操作历史</h2>
+                <button class="dr-close" id="historyClose" type="button" aria-label="关闭">✕</button>
+            </header>
+            <div class="dr-body">
+                <ol class="hist-list" id="histList"></ol>
+            </div>
+        </section>
+
+        <!-- 导出图纸信息 -->
+        <section class="ed-sheet" id="infoSheet" hidden>
+            <header class="dr-head">
+                <h2>导出图纸信息</h2>
+                <button class="dr-close" id="infoClose" type="button" aria-label="关闭">✕</button>
+            </header>
+            <div class="dr-body">
+                <p class="info-lead">
+                    把整张图纸压成一段文本 / 一个文件。以后在同一台或别的设备上导回来，图纸一颗都不差。
+                </p>
+
+                <div class="info-badge" id="infoBadge"></div>
+
+                <div class="info-list">
+                    <div class="info-item">
+                        <div class="info-text">
+                            <strong>复制到剪贴板</strong>
+                            <span>压缩版，直接粘到聊天窗口或备忘录里存着</span>
+                        </div>
+                        <button class="btn btn-primary btn-sm" id="infoCopy" type="button">复制</button>
+                    </div>
+
+                    <div class="info-item">
+                        <div class="info-text">
+                            <strong>下载 txt</strong>
+                            <span>同样是压缩版，存成文件更好找</span>
+                        </div>
+                        <button class="btn btn-sm" id="infoTxt" type="button">下载</button>
+                    </div>
+
+                    <div class="info-item">
+                        <div class="info-text">
+                            <strong>下载工程文件</strong>
+                            <span>完整保留画布尺寸、调色板和当前配色，只给本站用</span>
+                        </div>
+                        <button class="btn btn-sm" id="infoJson" type="button">下载 .json</button>
+                    </div>
+                </div>
+
+                <details class="info-preview">
+                    <summary>看看这段文本长什么样</summary>
+                    <textarea class="info-textarea" id="infoText" readonly spellcheck="false"></textarea>
+                </details>
+            </div>
+        </section>
+
+        <!-- 智能优化 -->
+        <section class="ed-sheet ed-sheet-opt" id="smartSheet" hidden>
+            <header class="dr-head">
+                <h2>智能优化</h2>
+                <span class="so-head-hint" id="soHeadHint"></span>
+                <button class="dr-icon" id="soMax" type="button" title="最大化 / 还原">⛶</button>
+                <button class="dr-close" id="smartClose" type="button" aria-label="关闭">✕</button>
+            </header>
+
+            <div class="so-main">
+                <!-- 左：条件 + 优化刷 -->
+                <aside class="so-side">
+                    <div class="so-sec">
+                        <div class="so-sec-title">优化条件</div>
+
+                        <label class="so-row">
+                            <span>低频判定</span>
+                            <span class="dr-inline">
+                                少于 <input class="input dr-num" type="number" id="smRatio" min="1" max="20" value="3">
+                                % 的豆子
+                            </span>
+                        </label>
+
+                        <label class="so-row">
+                            <span>颜色接近度</span>
+                            <span class="dr-inline so-inline-wide">
+                                <input class="range" type="range" id="smDelta" min="2" max="20" step="1" value="9">
+                                <em id="smDeltaVal">ΔE ≤ 9</em>
+                            </span>
+                        </label>
+
+                        <label class="so-check" id="soScopeWrap" hidden>
+                            <input type="checkbox" id="soScope" checked>
+                            <span id="soScopeLabel">只作用于当前选区</span>
+                        </label>
+                    </div>
+
+                    <div class="so-sec">
+                        <div class="so-sec-title">
+                            优化刷
+                            <em>在预览上涂，抠出不想动的地方</em>
+                        </div>
+
+                        <div class="so-modes" id="soModes">
+                            <button class="so-mode is-on" data-mode="erase" type="button">排除</button>
+                            <button class="so-mode" data-mode="restore" type="button">恢复</button>
+                            <button class="so-mode so-mode-flat" id="soClearErased" type="button" title="清空所有排除">清空</button>
+                        </div>
+
+                        <label class="so-row">
+                            <span>笔刷大小</span>
+                            <span class="dr-inline so-inline-wide">
+                                <input class="range" type="range" id="soBrush" min="1" max="10" step="1" value="2">
+                                <em id="soBrushVal">2</em>
+                            </span>
+                        </label>
+
+                        <div class="so-colors">
+                            <label class="so-color">
+                                <input class="color-well" type="color" id="soMarkColor" value="#ff2d55">
+                                <span>会改变</span>
+                            </label>
+                            <label class="so-color">
+                                <input class="color-well" type="color" id="soErasedColor" value="#0ca678">
+                                <span>已排除</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="so-hint" id="soHint">拖动 = 排除；按住 <b>Alt</b> 拖动 = 恢复。</div>
+                </aside>
+
+                <!-- 中：预览 -->
+                <div class="so-stage">
+                    <div class="so-canvas-wrap" id="soWrap">
+                        <div class="so-canvas-box" id="soBox">
+                            <canvas id="soCanvas"></canvas>
+                            <div class="so-cursor" id="soCursor" hidden></div>
+                        </div>
+                    </div>
+                    <div class="so-stage-foot">
+                        <span id="soInfo">—</span>
+                        <span class="so-zoominfo" id="soZoom">—</span>
+                    </div>
+                </div>
+
+                <!-- 右：建议 -->
+                <aside class="so-list-col">
+                    <div class="sm-summary" id="smSummary"></div>
+                    <div class="so-list-tools">
+                        <span id="soListCount">—</span>
+                        <button class="so-mini" id="soAllOn" type="button">全选</button>
+                        <button class="so-mini" id="soAllOff" type="button">全不选</button>
+                    </div>
+                    <div class="sm-list" id="smList"></div>
+                </aside>
+            </div>
+
+            <footer class="dr-foot">
+                <button class="btn" id="smartCancel" type="button">取消</button>
+                <button class="btn btn-primary" id="smartApply" type="button">合并</button>
+            </footer>
+        </section>
+
+        <div class="ed-scrim" id="scrim" hidden></div>
+    </main>
+
+    <script src="js/colors.js"></script>
+    <script src="js/colorUtils.js"></script>
+    <!-- 图纸信息编码（v1 的 InfoPaper 三件套，格式跨版本通用） -->
+    <script src="modules/InfoPaperConverter.js"></script>
+    <script src="modules/InfoPaperCompressor.js"></script>
+    <script src="modules/InfoPaperManager.js"></script>
+    <!-- 成品预览渲染（v1 的物理烫效果，独立模块）。纹理 318KB，点「预览成品」时才拉 --> 
+    <script src="js/ironPreview.js"></script>
+    <script src="js/editor.js"></script>
+</body>
+
+</html>

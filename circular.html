@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>豆师傅 - 圆形拼豆图纸</title>
+    <meta name="description" content="豆师傅 - 免费在线圆形拼豆图纸生成器">
+    <link rel="preload" href="css/style.ad7dcb40.min.css" as="style">
+    <link rel="stylesheet" href="css/style.ad7dcb40.min.css" media="print" onload="this.media='all'">
+    <style>
+        .circular-page #perlerCanvas,
+        .circular-page .perler-canvas-wrapper canvas {
+            image-rendering: auto !important;
+        }
+    </style>
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7614196764370237"
+     crossorigin="anonymous"></script>
+</head>
+<body class="circular-page">
+    <main class="container">
+        <header>
+            <div class="header-content">
+                <div class="header-title">
+                    <h1 class="brand-title" id="brandTitle">豆师傅</h1>
+                </div>
+                <nav class="nav-bar">
+                    <button class="nav-btn" data-section="index" onclick="window.location.href='index.html'">图转拼豆</button>
+                    <button class="nav-btn active" data-section="circular" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white;">🔵 圆形拼豆</button>
+                    <button class="nav-btn" data-section="myDesigns" onclick="window.location.href='index.html#myDesigns'">📁 我的图纸</button>
+                    <button class="nav-btn" data-section="timer" onclick="window.location.href='index.html#timer'">矩阵计时</button>
+                    <button class="nav-btn" id="importInfoPaperBtn" data-section="import">导入图纸</button>
+                </nav>
+                <div class="language-switch">
+                    <button id="langZh" class="lang-btn active">中文</button>
+                    <button id="langEn" class="lang-btn">EN</button>
+                </div>
+            </div>
+        </header>
+
+        <section class="upload-section" id="uploadSection">
+            <div class="upload-areas">
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-icon">📷</div>
+                    <p>导入图像</p>
+                    <p class="upload-hint">点击或拖拽图片到此处上传<br>支持 JPG、PNG、GIF 格式</p>
+                    <input type="file" id="fileInput" accept="image/*" style="display: none;">
+                </div>
+                <div class="upload-area blank-canvas-area" id="blankCanvasArea">
+                    <div class="upload-icon">✏️</div>
+                    <p>空白画布</p>
+                    <p class="upload-hint">从空白开始创作<br>自由发挥你的想象力</p>
+                </div>
+            </div>
+        </section>
+
+        <div class="modal" id="blankCanvasModal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>创建空白画布</h2>
+                    <button class="close-btn" id="closeBlankCanvasModalBtn">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <label style="font-weight: 600; margin-bottom: 12px; display: block;">选择画布大小：</label>
+                    <div class="blank-sizes">
+                        <button class="blank-size-btn" data-width="52" data-height="52">52 × 52</button>
+                        <button class="blank-size-btn" data-width="78" data-height="78">78 × 78</button>
+                        <button class="blank-size-btn" data-width="104" data-height="104">104 × 104</button>
+                    </div>
+                    <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #eee;">
+                        <label style="font-weight: 600; margin-bottom: 10px; display: block;">自定义尺寸：</label>
+                        <div class="blank-custom-size">
+                            <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                                <label>宽度：</label>
+                                <input type="number" id="blankCanvasWidth" min="8" max="256" value="64">
+                            </div>
+                            <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                                <label>高度：</label>
+                                <input type="number" id="blankCanvasHeight" min="8" max="256" value="64">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-primary" id="confirmBlankCanvasBtn">创建</button>
+                    <button class="btn btn-secondary" id="cancelBlankCanvasBtn">取消</button>
+                </div>
+            </div>
+        </div>
+
+        <section class="workspace" id="workspace" style="display: none;">
+            
+            <div class="preview-section" id="originalSection">
+                <div class="preview-left">
+                    <div class="preview-panel">
+                        <h3>原图预览</h3>
+                        <div class="canvas-wrapper" style="position: relative;">
+                            <canvas id="originalCanvas"></canvas>
+                            <div id="cropOverlay" class="crop-overlay" style="display: none;">
+                                <div id="cropBox" class="crop-box">
+                                    <div class="crop-handle crop-handle-nw" data-handle="nw"></div>
+                                    <div class="crop-handle crop-handle-ne" data-handle="ne"></div>
+                                    <div class="crop-handle crop-handle-sw" data-handle="sw"></div>
+                                    <div class="crop-handle crop-handle-se" data-handle="se"></div>
+                                    <div class="crop-handle crop-handle-n" data-handle="n"></div>
+                                    <div class="crop-handle crop-handle-s" data-handle="s"></div>
+                                    <div class="crop-handle crop-handle-w" data-handle="w"></div>
+                                    <div class="crop-handle crop-handle-e" data-handle="e"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <p id="originalSize" class="size-info"></p>
+                    </div>
+                </div>
+                <div class="preview-right">
+                    <div class="controls-section">
+                        <div class="control-group">
+                            <label>目标尺寸</label>
+                            <div class="size-inputs">
+                                <div>
+                                    <label>宽度：</label>
+                                    <input type="number" id="widthInput" min="16" max="4096">
+                                    <span>px</span>
+                                </div>
+                                <div>
+                                    <label>高度：</label>
+                                    <input type="number" id="heightInput" min="16" max="4096">
+                                    <span>px</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="control-group">
+                            <label>预设尺寸</label>
+                            <div class="preset-sizes">
+                                <button class="preset-btn" data-width="64" data-height="64">64×64</button>
+                                <button class="preset-btn" data-width="128" data-height="128">128×128</button>
+                                <button class="preset-btn" data-width="256" data-height="256">256×256</button>
+                                <button class="preset-btn" data-width="512" data-height="512">512×512</button>
+                            </div>
+                        </div>
+                        <div class="control-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="keepRatioCheckbox" checked>
+                                <span>保持宽高比</span>
+                            </label>
+                        </div>
+                        <div class="control-group">
+                            <label>图片裁剪旋转</label>
+                            <div class="crop-buttons">
+                                <button id="cropBtn" class="btn crop-btn">✂️ 裁剪旋转</button>
+                                <button id="resetCropBtn" class="btn crop-btn reset" style="display: none;">↺ 重置</button>
+                                <button id="confirmCropBtn" class="btn crop-btn confirm" style="display: none;">✓ 确认</button>
+                                <button id="cancelCropBtn" class="btn crop-btn cancel" style="display: none;">✕ 取消</button>
+                            </div>
+                            <div class="rotate-controls" id="rotateControls" style="display: none; margin-top: 10px;">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <span style="font-size: 0.9em;">旋转:</span>
+                                    <input type="range" id="rotateSlider" min="0" max="360" value="0" style="flex: 1;">
+                                    <span id="rotateValue" style="min-width: 35px; text-align: right;">0°</span>
+                                </div>
+                                <div style="display: flex; gap: 5px; margin-top: 8px;">
+                                    <button class="btn btn-secondary" id="rotate90Btn" style="flex: 1; font-size: 0.85em;">↻ 90°</button>
+                                    <button class="btn btn-secondary" id="rotate180Btn" style="flex: 1; font-size: 0.85em;">180°</button>
+                                    <button class="btn btn-secondary" id="rotate270Btn" style="flex: 1; font-size: 0.85em;">↺ 270°</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mode-switch" id="modeSwitch">
+                <button id="simpleModeBtn" class="mode-btn active">简单模式</button>
+                <button id="advancedModeBtn" class="mode-btn">高级模式</button>
+            </div>
+
+            <div class="preview-section" id="pixelatedSection">
+                <div class="preview-left">
+                    <div class="preview-panel">
+                        <h3>像素化预览</h3>
+                        <div class="pixel-mode-switch" style="display: none;">
+                            <button id="pixelModeBtn" class="mode-btn active">批量像素化</button>
+                            <button id="carveModeBtn" class="mode-btn">雕刻分裂</button>
+                        </div>
+                        <div class="canvas-wrapper">
+                            <canvas id="pixelatedCanvas"></canvas>
+                        </div>
+                        <p id="pixelatedSize" class="size-info"></p>
+                        <p id="pixelatedGridCount" class="size-info"></p>
+                        <div class="canvas-zoom-control">
+                            <label>
+                                <span>缩放：</span>
+                                <span id="pixelatedZoomValue">100%</span>
+                            </label>
+                            <input type="range" id="pixelatedZoomSlider" min="25" max="200" value="100">
+                        </div>
+                    </div>
+                </div>
+                <div class="preview-right">
+                    <div class="controls-section">
+                        <div class="control-group">
+                            <label><span>像素化方法：</span></label>
+                            <select id="pixelMethod">
+                                <option value="mosaic">马赛克化（平均）</option>
+                                <option value="majority" selected>主要颜色（推荐）</option>
+                                <option value="quantized">量化像素化</option>
+                                <option value="pixel-art">像素艺术</option>
+                            </select>
+                        </div>
+                        <div class="control-group">
+                            <label>
+                                <span>像素块大小：</span>
+                                <span id="pixelSizeValue">16px</span>
+                            </label>
+                            <input type="range" id="pixelSizeSlider" min="1" max="64" value="16">
+                        </div>
+                        <div class="control-group flex-row">
+                            <div class="flex-item checkbox-item">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="showPixelGrid" checked>
+                                    <span>显示像素划分线</span>
+                                </label>
+                            </div>
+                            <div class="flex-item color-item">
+                                <label>
+                                    <span>像素划分线颜色：</span>
+                                </label>
+                                <input type="color" id="pixelGridColor" value="#000000">
+                            </div>
+                        </div>
+                        <div class="control-group advanced-only">
+                            <label>
+                                <span>像素划分线粗度：</span>
+                                <span id="pixelGridLineWidthValue">1px</span>
+                            </label>
+                            <input type="number" id="pixelGridLineWidth" min="0" max="5" step="0.5" value="1">
+                        </div>
+                        <div class="control-group flex-row">
+                            <div class="flex-item slider-half">
+                                <label>
+                                    <span>X轴偏移：</span>
+                                    <span id="pixelGridOffsetXValue">0px</span>
+                                </label>
+                                <input type="range" id="pixelGridOffsetX" min="0" max="63" value="0">
+                            </div>
+                            <div class="flex-item slider-half">
+                                <label>
+                                    <span>Y轴偏移：</span>
+                                    <span id="pixelGridOffsetYValue">0px</span>
+                                </label>
+                                <input type="range" id="pixelGridOffsetY" min="0" max="63" value="0">
+                            </div>
+                        </div>
+                        <div class="control-group advanced-only" id="quantizedPixelControls">
+                            <label>
+                                <span>目标颜色数量：</span>
+                                <span id="targetColorCountValue">32</span>
+                            </label>
+                            <div class="color-count-inputs">
+                                <input type="range" id="targetColorCountSlider" min="8" max="96" step="4" value="32">
+                                <input type="number" id="targetColorCountInput" min="8" max="96" value="32" style="width: 60px; margin-left: 10px;">
+                            </div>
+                        </div>
+                        <div class="control-group advanced-only">
+                            <label><span>像素化后处理：</span></label>
+                        </div>
+                        <div class="control-group advanced-only flex-row">
+                            <div class="flex-item checkbox-item">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="enableContrast" checked>
+                                    <span>增强对比度</span>
+                                </label>
+                            </div>
+                            <div class="flex-item slider-item">
+                                <label>
+                                    <span>对比度强度：</span>
+                                    <span id="contrastValue">1.3x</span>
+                                </label>
+                                <input type="range" id="contrastSlider" min="1.0" max="3.0" step="0.1" value="1.3">
+                            </div>
+                        </div>
+                        <div class="control-group advanced-only flex-row">
+                            <div class="flex-item checkbox-item">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="enableSharpen">
+                                    <span>图片锐化</span>
+                                </label>
+                            </div>
+                            <div class="flex-item slider-item">
+                                <label>
+                                    <span>锐化强度：</span>
+                                    <span id="sharpenValue">0.5</span>
+                                </label>
+                                <input type="range" id="sharpenSlider" min="0.1" max="2.0" step="0.1" value="0.5">
+                            </div>
+                        </div>
+                        <div class="control-group advanced-only flex-row">
+                            <div class="flex-item checkbox-item">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="enableNeighborSmooth">
+                                    <span>邻域平滑</span>
+                                </label>
+                            </div>
+                            <div class="flex-item checkbox-item">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="enableColorQuantize">
+                                    <span>颜色量化</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="control-group advanced-only flex-row">
+                            <div class="flex-item full-width">
+                                <label>
+                                    <span>保留颜色数量：</span>
+                                    <span id="colorCountValue">8</span>
+                                    <span style="color: #888; margin-left: 8px;">(图片实际颜色: <span id="imageTotalColors">0</span>)</span>
+                                </label>
+                                <div class="color-count-inputs">
+                                    <input type="range" id="colorCountSlider" min="2" max="256" step="1" value="8">
+                                    <input type="number" id="colorCountInput" min="2" max="256" value="8" style="width: 60px; margin-left: 10px;">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="control-group" id="colorQuantizePanel" style="display: none;">
+                            <label><span>颜色使用统计：</span></label>
+                            <div class="sort-buttons">
+                                <button class="sort-btn active" data-sort="count-desc">数量降序</button>
+                                <button class="sort-btn" data-sort="count-asc">数量升序</button>
+                                <button class="sort-btn" data-sort="hue">色相</button>
+                            </div>
+                            <div id="colorUsageList" style="max-height: 250px; overflow-y: auto; background: #f8f9fa; border-radius: 6px; padding: 10px;"></div>
+                        </div>
+                        <div class="action-buttons">
+                            <button id="downloadBtn" class="btn btn-primary">下载像素图</button>
+                        </div>
+                    </div>
+                    
+                    <div id="carveControls" class="controls-section" style="display: none;">
+                        <div class="control-group">
+                            <label>
+                                <span>初始块大小：</span>
+                                <span id="initialBlockSizeValue">200px</span>
+                            </label>
+                            <input type="range" id="initialBlockSizeSlider" min="50" max="400" step="20" value="200">
+                        </div>
+                        <div class="control-group">
+                            <label>
+                                <span>最小块大小：</span>
+                                <span id="minBlockSizeValue">40px</span>
+                            </label>
+                            <input type="range" id="minBlockSizeSlider" min="10" max="100" value="40">
+                        </div>
+                        <div class="control-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="showCarveGrid" checked>
+                                <span>显示分裂网格</span>
+                            </label>
+                        </div>
+                        <div class="control-group">
+                            <div class="action-buttons" style="margin-bottom: 10px;">
+                                <button id="resetCarveBtn" class="btn btn-secondary">重置雕刻</button>
+                                <button id="splitAllBtn" class="btn btn-secondary">分裂全部</button>
+                            </div>
+                            <div class="action-buttons">
+                                <button id="mergeSelectedBtn" class="btn btn-secondary">合并选中</button>
+                            </div>
+                        </div>
+                        <div class="control-group">
+                            <label>
+                                <span>提示：点击色块进行分裂</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="preview-section" id="perlerSection">
+                <div class="preview-left">
+                    <div class="preview-panel" id="perlerPanel">
+                        <h3>圆形拼豆图纸</h3>
+                        <div id="perlerContent">
+                            <div id="perlerChartArea">
+                                <div class="perler-chart-wrapper">
+                                    <div class="perler-header">
+                                        <div class="perler-watermark" id="perlerWatermark"></div>
+                                        <div class="perler-summary" id="perlerSummary"></div>
+                                    </div>
+                                    <div class="canvas-wrapper perler-canvas-wrapper">
+                                        <canvas id="perlerCanvas"></canvas>
+                                    </div>
+                                    <p id="perlerSize" class="size-info" style="display:none;"></p>
+                                    <div class="canvas-zoom-control">
+                                        <label>
+                                            <span>缩放：</span>
+                                            <span id="perlerZoomValue">100%</span>
+                                        </label>
+                                        <input type="range" id="perlerZoomSlider" min="25" max="200" value="100">
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="colorLegendArea"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="preview-right">
+                    <div id="perlerOptions" class="controls-section">
+                        <div class="control-group">
+                            <label><span>目标环数：</span></label>
+                            <div class="size-inputs">
+                                <div style="flex: 1;">
+                                    <label>环数：</label>
+                                    <input type="number" id="ringCountInput" min="2" max="30" value="8">
+                                    <span>圈</span>
+                                </div>
+                                <div style="flex: 1; align-self: flex-end;">
+                                    <label>总豆子数：</label>
+                                    <span id="totalBeadsValue" style="font-weight: bold; color: #667eea;">1 + 3×N×(N-1)</span>
+                                </div>
+                            </div>
+                            <div class="preset-sizes">
+                                <button class="preset-btn" data-ring="5">5圈</button>
+                                <button class="preset-btn" data-ring="8">8圈</button>
+                                <button class="preset-btn" data-ring="10">10圈</button>
+                                <button class="preset-btn" data-ring="12">12圈</button>
+                                <button class="preset-btn" data-ring="15">15圈</button>
+                                <button class="preset-btn" data-ring="20">20圈</button>
+                            </div>
+                        </div>
+                        <div class="control-group advanced-only">
+                            <label for="colorSetSelect"><span>颜色套装：</span></label>
+                            <select id="colorSetSelect">
+                                <option value="mard221">Mard 221色</option>
+                                <option value="mard291" selected>Mard 291色 (默认)</option>
+                                <option value="mard291Refined">Mard 291色-精炼 (精简版)</option>
+                                <option value="mard120">Mard 120色</option>
+                                <option value="mard72">Mard 72色</option>
+                                <option value="mard48">Mard 48色</option>
+                                <option value="mard24">Mard 24色</option>
+                                <option value="mardGray">Mard 黑白灰 (23色)</option>
+                                <option value="mardH">Mard H系中性色 (23色)</option>
+                                <option value="perler24">Perler 24色</option>
+                                <option value="perler48">Perler 48色</option>
+                                <option value="perler72">Perler 72色</option>
+                                <option value="hama">Hama (10色)</option>
+                            </select>
+                        </div>
+                        <div class="control-group advanced-only">
+                            <label><span>颜色映射方法：</span></label>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <select id="colorMappingMethod">
+                                    <option value="cie2000" selected>CIEDE2000 (最精确)</option>
+                                    <option value="cie2000-smoothed">CIEDE2000 (大色块优化)</option>
+                                    <option value="cie94">CIE94 (精确)</option>
+                                    <option value="cie76">CIE76 (Lab)</option>
+                                    <option value="weighted-rgb">加权RGB</option>
+                                    <option value="hsl">HSL色彩空间</option>
+                                    <option value="hsv">HSV色彩空间</option>
+                                </select>
+                                <button id="cie2000SettingsBtn" class="cie2000-settings-btn" style="display: none;" title="设置优化参数">⚙️</button>
+                            </div>
+                            <div id="cie2000ParamsPanel" class="cie2000-params-panel" style="display: none; margin-top: 10px; padding: 12px; background: #f5f5f5; border-radius: 8px; border: 1px solid #ddd;">
+                                <div style="display: grid; grid-template-columns: 1fr; gap: 12px;">
+                                    <div>
+                                        <label style="display: block; font-size: 13px; margin-bottom: 4px; font-weight: 500;">邻域半径</label>
+                                        <div style="font-size: 11px; color: #666; margin-bottom: 4px;">(考虑周围多少像素，越大平滑范围越广，可能模糊边缘)</div>
+                                        <input type="range" id="cie2000Radius" min="1" max="5" value="1" style="width: 100%;">
+                                        <span id="cie2000RadiusValue" style="font-size: 12px;">1 (3×3区域)</span>
+                                    </div>
+                                    <div>
+                                        <label style="display: block; font-size: 13px; margin-bottom: 4px; font-weight: 500;">颜色差异阈值</label>
+                                        <div style="font-size: 11px; color: #666; margin-bottom: 4px;">(CIEDE2000单位，越大允许合并的颜色差异越大，颜色种类越少)</div>
+                                        <input type="range" id="cie2000Threshold" min="1" max="50" value="5" style="width: 100%;">
+                                        <span id="cie2000ThresholdValue" style="font-size: 12px;">5</span>
+                                    </div>
+                                    <div>
+                                        <label style="display: block; font-size: 13px; margin-bottom: 4px; font-weight: 500;">最小占比</label>
+                                        <div style="font-size: 11px; color: #666; margin-bottom: 4px;">(邻域多数颜色需要占多少比例才触发替换，越低越容易被替换)</div>
+                                        <input type="range" id="cie2000Ratio" min="20" max="95" value="50" style="width: 100%;">
+                                        <span id="cie2000RatioValue" style="font-size: 12px;">50%</span>
+                                    </div>
+                                    <div>
+                                        <label style="display: block; font-size: 13px; margin-bottom: 4px; font-weight: 500;">迭代次数</label>
+                                        <div style="font-size: 11px; color: #666; margin-bottom: 4px;">(重复平滑的次数，越高效果越强但处理时间越长)</div>
+                                        <input type="range" id="cie2000Iteration" min="1" max="5" value="1" style="width: 100%;">
+                                        <span id="cie2000IterationValue" style="font-size: 12px;">1</span>
+                                    </div>
+                                </div>
+                                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px;">
+                                    <button id="cie2000ApplyBtn" style="padding: 4px 12px; font-size: 12px;">应用</button>
+                                    <button id="cie2000ResetBtn" style="padding: 4px 12px; font-size: 12px;">重置</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="control-group">
+                            <label><span>图纸样式：</span></label>
+                            <select id="chartStyle">
+                                <option value="color" selected>彩色图纸</option>
+                                <option value="color-with-code">彩色图纸（带编号）</option>
+                                <option value="bw">黑白图纸(带编号)</option>
+                            </select>
+                        </div>
+                        <div class="control-group advanced-only">
+                            <label><span>颜色统计位置：</span></label>
+                            <select id="legendPosition">
+                                <option value="bottom">图纸下方</option>
+                                <option value="right">图纸右侧</option>
+                                <option value="hidden">隐藏</option>
+                            </select>
+                        </div>
+                        <div class="control-group advanced-only">
+                            <label><span>拼豆形状：</span></label>
+                            <select id="beadShape">
+                                <option value="circle" selected>圆形</option>
+                                <option value="square">正方形</option>
+                                <option value="ring">圆环</option>
+                                <option value="round-square">圆角正方形</option>
+                            </select>
+                        </div>
+                        <div class="control-group">
+                            <label><span>透明格颜色：</span></label>
+                            <div style="display: flex; gap: 10px; align-items: center;">
+                                <input type="color" id="transparentCellColor" value="#ffffff" style="width: 60px; height: 40px;">
+                                <span id="transparentCellColorValue" style="font-size: 0.9em; color: #666;">#ffffff</span>
+                            </div>
+                        </div>
+                        <div class="control-group flex-row">
+                            <div class="flex-item slider-half">
+                                <label>
+                                    <span>拼豆大小（显示）：</span>
+                                    <span id="beadSizeValue">16px</span>
+                                </label>
+                                <input type="range" id="beadSizeSlider" min="3" max="48" step="1" value="16">
+                            </div>
+                            <div class="flex-item slider-half">
+                                <label>
+                                    <span>拼豆大小（导出）：</span>
+                                    <span id="exportBeadSizeValue">32px</span>
+                                </label>
+                                <input type="range" id="exportBeadSizeSlider" min="3" max="96" step="1" value="32">
+                            </div>
+                        </div>
+                        <div class="control-group">
+                            <label>
+                                <span>豆子大小比例：</span>
+                                <span id="beadScaleValue">90%</span>
+                            </label>
+                            <input type="range" id="beadScaleSlider" min="50" max="150" step="1" value="90">
+                        </div>
+                        <div class="control-group advanced-only flex-row">
+                            <div class="flex-item checkbox-item">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="showGridLines" checked>
+                                    <span>显示网格线</span>
+                                </label>
+                            </div>
+                            <div class="flex-item checkbox-item">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="showCoordNumbers" checked>
+                                    <span>显示坐标数字</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="control-group advanced-only">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="showSectorLines" checked>
+                                <span>显示扇区分割线</span>
+                            </label>
+                        </div>
+                        <div class="control-group advanced-only flex-row">
+                            <div class="flex-item color-item">
+                                <label><span>网格线颜色：</span></label>
+                                <input type="color" id="coordLineColor" value="#000000">
+                            </div>
+                            <div class="flex-item number-item">
+                                <label><span>网格线粗度：</span></label>
+                                <input type="number" id="gridLineWidth" min="0" max="5" step="0.5" value="1" style="width: 80px;">
+                            </div>
+                        </div>
+                        <div class="control-group advanced-only">
+                            <label><span>坐标数字颜色：</span></label>
+                            <input type="color" id="coordNumberColor" value="#000000">
+                        </div>
+                        <div class="control-group advanced-only flex-row">
+                            <div class="flex-item checkbox-item">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="showLargeGridLines">
+                                    <span>显示大格子线</span>
+                                </label>
+                            </div>
+                            <div class="flex-item color-item">
+                                <label><span>大格子线颜色：</span></label>
+                                <input type="color" id="largeGridLineColor" value="#8B4513">
+                            </div>
+                        </div>
+                        <div class="control-group advanced-only flex-row">
+                            <div class="flex-item number-item">
+                                <label><span>大格子大小（每N个小格子）：</span></label>
+                                <input type="number" id="largeGridSize" min="0" max="100" value="5" style="width: 80px;">
+                            </div>
+                            <div class="flex-item number-item">
+                                <label><span>大格子线粗度：</span></label>
+                                <input type="number" id="largeGridLineWidth" min="0.5" max="5" step="0.5" value="2" style="width: 80px;">
+                            </div>
+                        </div>
+                        <div class="control-group advanced-only">
+                            <label><span>水印文本：</span></label>
+                            <input type="text" id="watermarkText" value="豆师傅- dsf666.pages.dev" style="width: 100%;">
+                        </div>
+                        <div class="control-group">
+                            <button id="renderPerlerBtn" class="btn btn-primary">🎨 渲染圆形拼豆图纸</button>
+                        </div>
+                        <div class="control-group">
+                            <button id="smartOptimizeBtn" class="btn btn-primary">🧠 智能优化</button>
+                        </div>
+                        <div class="control-group">
+                            <label>
+                                <span>导出高清缩放：</span>
+                                <span id="exportScaleValue">1×</span>
+                            </label>
+                            <div style="display: flex; gap: 10px; align-items: center;">
+                                <input type="range" id="exportScaleSlider" min="1" max="16" step="0.5" value="1" style="flex: 1;">
+                                <input type="number" id="exportScaleInput" min="1" max="16" step="0.5" value="1" style="width: 70px;">
+                            </div>
+                        </div>
+                        <div class="action-buttons">
+                            <button id="downloadPerlerBtn" class="btn btn-primary" style="flex: 2;">下载</button>
+                            <select id="exportFormatSelect" style="flex: 1; min-width: 80px; max-width: 100px;">
+                                <option value="png" selected>PNG</option>
+                                <option value="svg">SVG</option>
+                            </select>
+                        </div>
+                        <div class="action-buttons" style="margin-top: 10px;">
+                            <button id="exportInfoPaperCompressedBtn" class="btn" style="flex: 2; background: #ed8936; border-color: #ed8936; color: white;">📦 导出图纸信息</button>
+                            <button id="exportInfoPaperCompressedFileBtn" class="btn" style="flex: 1; min-width: 80px; max-width: 100px; background: #dd6b20; border-color: #dd6b20; color: white;">下载</button>
+                        </div>
+                        <div class="action-buttons" style="margin-top: 10px;">
+                            <button id="saveToMyDesignsBtn" class="btn btn-primary" style="flex: 1; background: linear-gradient(135deg, #48bb78 0%, #38a169 100%); border: none;">💾 保存到我的图纸</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="preview-section" id="customEditSection">
+                <div class="preview-left">
+                    <div class="preview-panel">
+                        <h3>自定义编辑</h3>
+                        <div class="canvas-wrapper perler-canvas-wrapper">
+                            <div class="canvas-container" style="position: relative; display: inline-block;">
+                                <canvas id="customEditCanvas"></canvas>
+                                <div id="customEditBrushCursor" class="brush-cursor"></div>
+                                <div id="canvasBoundsHandles" style="display: none; position: absolute; top: 0; left: 0; pointer-events: none;">
+                                    <div class="canvas-bounds-handle canvas-bounds-handle-tl" data-handle="tl" style="position: absolute; width: 12px; height: 12px; background: #667eea; border: 2px solid white; cursor: nwse-resize; pointer-events: auto;"></div>
+                                    <div class="canvas-bounds-handle canvas-bounds-handle-tr" data-handle="tr" style="position: absolute; width: 12px; height: 12px; background: #667eea; border: 2px solid white; cursor: nesw-resize; pointer-events: auto;"></div>
+                                    <div class="canvas-bounds-handle canvas-bounds-handle-bl" data-handle="bl" style="position: absolute; width: 12px; height: 12px; background: #667eea; border: 2px solid white; cursor: nesw-resize; pointer-events: auto;"></div>
+                                    <div class="canvas-bounds-handle canvas-bounds-handle-br" data-handle="br" style="position: absolute; width: 12px; height: 12px; background: #667eea; border: 2px solid white; cursor: nwse-resize; pointer-events: auto;"></div>
+                                    <div class="canvas-bounds-handle canvas-bounds-handle-t" data-handle="t" style="position: absolute; width: 12px; height: 12px; background: #667eea; border: 2px solid white; cursor: ns-resize; pointer-events: auto;"></div>
+                                    <div class="canvas-bounds-handle canvas-bounds-handle-r" data-handle="r" style="position: absolute; width: 12px; height: 12px; background: #667eea; border: 2px solid white; cursor: ew-resize; pointer-events: auto;"></div>
+                                    <div class="canvas-bounds-handle canvas-bounds-handle-b" data-handle="b" style="position: absolute; width: 12px; height: 12px; background: #667eea; border: 2px solid white; cursor: ns-resize; pointer-events: auto;"></div>
+                                    <div class="canvas-bounds-handle canvas-bounds-handle-l" data-handle="l" style="position: absolute; width: 12px; height: 12px; background: #667eea; border: 2px solid white; cursor: ew-resize; pointer-events: auto;"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <p id="customEditInfo" class="size-info"></p>
+                    </div>
+                </div>
+                <div class="preview-right">
+                    <div class="controls-section">
+                        <div class="control-group">
+                            <label><span>编辑工具：</span></label>
+                            <div class="edit-tools">
+                                <button class="edit-tool-btn active" data-tool="brush">画笔</button>
+                                <button class="edit-tool-btn" data-tool="eraser">橡皮擦</button>
+                                <button class="edit-tool-btn" data-tool="razor">剃刀</button>
+                                <button class="edit-tool-btn" data-tool="chainRazor">连锁剃刀</button>
+                                <button class="edit-tool-btn" data-tool="fill">填充</button>
+                                <button class="edit-tool-btn" data-tool="picker">取色器</button>
+                                <button class="edit-tool-btn" data-tool="colorConvert">🔄 颜色转换</button>
+                                <button class="edit-tool-btn" data-tool="colorRemove">🚫 颜色剔除</button>
+                                <button class="edit-tool-btn" data-tool="canvasBounds">📐 画布边界</button>
+                                <button class="edit-tool-btn" data-tool="stroke">✏️ 描边</button>
+                            </div>
+                        </div>
+                        <div class="control-group flex-row">
+                            <div class="flex-item slider-item">
+                                <label><span>画笔大小：</span>
+                                    <span id="brushSizeValue">1</span>
+                                </label>
+                                <input type="range" id="customEditBrushSize" min="1" max="5" step="1" value="1">
+                            </div>
+                        </div>
+                        <div class="control-group">
+                            <label>图像翻转：</label>
+                            <div style="display: flex; gap: 10px;">
+                                <button id="flipHorizontalBtn" class="btn btn-secondary">↔️ 左右翻转</button>
+                                <button id="flipVerticalBtn" class="btn btn-secondary">↕️ 上下翻转</button>
+                            </div>
+                        </div>
+                        <div class="control-group flex-row">
+                            <div class="flex-item color-item">
+                                <label><span>当前颜色：</span></label>
+                                <div class="current-color-wrapper">
+                                    <input type="color" id="customEditColor" value="#000000">
+                                    <span id="currentColorValue">#000000</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="control-group flex-row">
+                            <div class="flex-item color-item">
+                                <label><span>橡皮擦颜色：</span></label>
+                                <div class="current-color-wrapper">
+                                    <input type="color" id="eraserColor" value="#ffffff">
+                                    <span id="eraserColorValue">#ffffff</span>
+                                </div>
+                            </div>
+                            <div class="flex-item color-item">
+                                <label>剃刀工具底色：</label>
+                                <div class="current-color-wrapper">
+                                    <input type="color" id="razorBgColor" value="#00ff00">
+                                    <span id="razorBgColorValue">#00ff00</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="control-group">
+                            <label>连锁最大色块：</label>
+                            <div class="current-color-wrapper">
+                                <input type="number" id="chainRazorMax" value="1000" min="1" max="10000" style="width: 100px;">
+                            </div>
+                        </div>
+                        <div class="control-group flex-row">
+                            <div class="flex-item checkbox-item">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="exportTransparentBackground">
+                                    <span>导出透明背景</span>
+                                </label>
+                            </div>
+                            <div class="flex-item">
+                                <button id="applyCustomEditBtn" class="btn btn-primary" style="width: 100%;">✓ 应用编辑</button>
+                            </div>
+                        </div>
+                        <div class="control-group flex-row">
+                            <div class="flex-item">
+                                <button id="undoCustomEditBtn" class="btn btn-secondary" style="width: 100%;">↩ 撤销</button>
+                            </div>
+                            <div class="flex-item" style="display: none;">
+                                <button id="saveSnapshotBtn" class="btn btn-secondary" style="width: 100%;">💾 保存快照</button>
+                            </div>
+                            <div class="flex-item">
+                                <button id="exportPixelImageBtn" class="btn btn-primary" style="width: 100%;">📥 导出像素图</button>
+                            </div>
+                        </div>
+                        <div class="control-group" id="canvasBoundsControls" style="display: none;">
+                            <label>📐 环数调整：</label>
+                            <div class="flex-row" style="margin-top: 10px;">
+                                <div class="flex-item">
+                                    <label style="font-weight: 600; margin-bottom: 5px; display: block;">环数：</label>
+                                    <input type="number" id="canvasBoundsRings" value="8" min="1" max="100" style="width: 100%;">
+                                </div>
+                            </div>
+                            <div style="margin-top: 10px; font-size: 12px; color: #666;">
+                                <span>当前豆子数：</span><span id="canvasBoundsCurrentSize">57</span>
+                            </div>
+                            <div style="margin-top: 10px; display: flex; gap: 10px;">
+                                <button id="increaseRingBtn" class="btn btn-secondary" style="flex: 1;">+ 增加一圈</button>
+                                <button id="decreaseRingBtn" class="btn btn-secondary" style="flex: 1;">- 减少一圈</button>
+                            </div>
+                            <button id="resetCanvasBoundsBtn" class="btn btn-secondary" style="width: 100%; margin-top: 10px;">重置环数</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="global-actions">
+                <button id="clearBtn" class="btn btn-danger">清空</button>
+                <button id="resetBtn" class="btn btn-secondary">重置</button>
+            </div>
+        </section>
+
+        <div id="showcaseSection" style="display: none;"></div>
+        <div id="timerSection" style="display: none;"></div>
+        <div id="myDesignsSection" style="display: none;">
+            <div id="myDesignsGrid"></div>
+            <div id="myDesignsEmpty"></div>
+            <div id="myDesignsCount"></div>
+            <button id="importDesignBtn" style="display: none;"></button>
+            <input type="file" id="importDesignFile" style="display: none;">
+        </div>
+        <button id="addTimerBtn" style="display: none;"></button>
+        <div id="timersGrid" style="display: none;"></div>
+        <div id="timerModal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <button id="closeTimerModalBtn" style="display: none;"></button>
+                <input type="number" id="modal-hours" style="display: none;">
+                <input type="number" id="modal-minutes" style="display: none;">
+                <input type="text" id="modal-title" style="display: none;">
+                <button id="cancelAddTimerBtn" style="display: none;"></button>
+                <button id="confirmAddTimerBtn" style="display: none;"></button>
+            </div>
+        </div>
+
+        <div id="smartOptimizeModal" class="modal" style="display: none;">
+            <div class="modal-content smart-optimize-modal">
+                <div class="modal-header">
+                    <h2>🧠 智能颜色优化</h2>
+                    <div class="header-actions">
+                        <button id="toggleFullscreenBtn" class="close-btn" title="全屏切换">🔍</button>
+                        <button id="closeModalBtn" class="close-btn">&times;</button>
+                    </div>
+                </div>
+                <div class="modal-body smart-optimize-three-column">
+                    <div class="left-panel">
+                        <div class="optimization-summary" id="optimizationSummary"></div>
+                        <div class="optimization-settings">
+                            <div class="control-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="enableColorMerge" checked>
+                                    <span>近似色融合</span>
+                                </label>
+                            </div>
+                            <div class="control-group">
+                                <label>
+                                    <span>近似色融合相似度：</span>
+                                    <span id="colorMergeThresholdValue">90%</span>
+                                </label>
+                                <input type="range" id="colorMergeThresholdSlider" min="50" max="100" value="90">
+                            </div>
+                            <div class="control-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="enableEdgeColorMerge" checked>
+                                    <span>边缘色融合</span>
+                                </label>
+                            </div>
+                            <div class="control-group">
+                                <label>
+                                    <span>边缘色融合相似度：</span>
+                                    <span id="edgeColorThresholdValue">85%</span>
+                                </label>
+                                <input type="range" id="edgeColorThresholdSlider" min="50" max="100" value="85">
+                            </div>
+                        </div>
+                        <hr style="border: none; border-top: 1px solid #ddd; margin: 15px 0;">
+                        <div class="brush-tool-panel">
+                            <h3>🖌️ 取消优化画笔</h3>
+                            <div class="control-group">
+                                <label>
+                                    <span>画笔大小：</span>
+                                    <span id="optimizeBrushSizeValue">1</span>
+                                </label>
+                                <input type="range" id="optimizeBrushSizeSlider" min="1" max="10" value="1">
+                            </div>
+                            <div class="control-group">
+                                <div class="brush-mode-buttons">
+                                    <button id="brushModeErase" class="btn btn-primary active" style="flex: 1;">擦除</button>
+                                    <button id="brushModeRestore" class="btn btn-secondary" style="flex: 1;">恢复</button>
+                                    <button id="clearErasedBlocks" class="btn btn-secondary" style="flex: 1;">清除</button>
+                                </div>
+                            </div>
+                            <div class="control-group">
+                                <label>
+                                    <span>将要优化颜色：</span>
+                                    <input type="color" id="optimizeHighlightColor" value="#ff0000" style="width: 40px; height: 30px; vertical-align: middle;">
+                                </label>
+                            </div>
+                            <div class="control-group">
+                                <label>
+                                    <span>取消优化颜色：</span>
+                                    <input type="color" id="optimizeErasedColor" value="#27ae60" style="width: 40px; height: 30px; vertical-align: middle;">
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="center-panel">
+                        <div class="optimization-preview-large">
+                            <h3>预览效果</h3>
+                            <div class="preview-canvas-wrapper-large">
+                                <div class="canvas-container" style="position: relative; display: inline-block;">
+                                    <canvas id="optimizationPreviewCanvas"></canvas>
+                                    <div id="brushCursor" class="brush-cursor"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="right-panel">
+                        <div class="suggestions-list" id="suggestionsList"></div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button id="rejectAllBtn" class="btn btn-secondary">✗ 全部拒绝</button>
+                    <button id="applyAllBtn" class="btn btn-primary">✓ 全部应用</button>
+                    <button id="confirmBtn" class="btn btn-primary">确认</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="snapshot-float-btn" id="snapshotFloatBtn" title="查看操作历史">
+            📜
+        </div>
+        <div class="snapshot-panel" id="snapshotPanel">
+            <div class="snapshot-panel-header">
+                <h3>📜 操作历史快照</h3>
+                <button class="close-btn" id="closeSnapshotPanel">&times;</button>
+            </div>
+            <div class="snapshot-panel-content" id="snapshotsContainer"></div>
+        </div>
+
+        <div class="floating-panel" id="strokePanel" style="display: none;">
+            <div class="floating-panel-header" id="strokePanelHeader">
+                <span>✏️ 描边</span>
+                <button class="floating-panel-close" id="closeStrokePanelBtn">×</button>
+            </div>
+            <div class="floating-panel-body">
+                <div style="margin-bottom: 12px;">
+                    <label style="font-weight: 600; margin-bottom: 6px; display: block; font-size: 0.85em;">描边类型：</label>
+                    <div style="display: flex; flex-direction: column; gap: 6px;">
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 6px 10px; border: 2px solid #ddd; border-radius: 6px; transition: all 0.2s; font-size: 0.85em;">
+                            <input type="radio" name="strokeType" value="outer" checked>
+                            <span>外描边（向外扩散）</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 6px 10px; border: 2px solid #ddd; border-radius: 6px; transition: all 0.2s; font-size: 0.85em;">
+                            <input type="radio" name="strokeType" value="inner">
+                            <span>内描边（向内侵蚀）</span>
+                        </label>
+                    </div>
+                </div>
+                <div style="margin-bottom: 12px;">
+                    <label style="font-weight: 600; margin-bottom: 6px; display: block; font-size: 0.85em;">描边厚度：<span id="strokeThicknessValue" style="color: #667eea;">1</span> <span>格</span></label>
+                    <input type="range" id="strokeThickness" min="1" max="10" step="1" value="1" style="width: 100%;">
+                </div>
+                <div style="margin-bottom: 12px;">
+                    <label style="font-weight: 600; margin-bottom: 6px; display: block; font-size: 0.85em;">描边颜色：</label>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <input type="color" id="strokeColor" value="#000000" style="width: 36px; height: 30px; border: 1px solid #ddd; border-radius: 4px; cursor: pointer;">
+                        <span id="strokeColorValue" style="font-family: monospace; font-size: 0.85em;">#000000</span>
+                    </div>
+                </div>
+                <button id="executeStrokeBtn" class="btn btn-primary" style="width: 100%; padding: 6px 12px; font-size: 0.9em;">▶ 执行描边</button>
+            </div>
+        </div>
+
+        <div class="floating-panel" id="colorConvertPanel" style="display: none;">
+            <div class="floating-panel-header" id="colorConvertPanelHeader">
+                <span>🔄 颜色转换</span>
+                <button class="floating-panel-close" id="closeColorConvertBtn">×</button>
+            </div>
+            <div class="floating-panel-body">
+                <div style="margin-bottom: 12px;">
+                    <label style="font-weight: 600; margin-bottom: 6px; display: block; font-size: 0.85em;">源颜色（要替换的颜色）：</label>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <input type="color" id="colorConvertSourceColor" value="#ffffff" style="width: 36px; height: 30px; border: 1px solid #ddd; border-radius: 4px; cursor: pointer;">
+                        <span id="colorConvertSourceColorValue" style="font-family: monospace; font-size: 0.85em;">#ffffff</span>
+                        <button id="pickSourceColorBtn" class="btn btn-secondary" style="padding: 4px 10px; font-size: 0.85em; margin-left: auto;">取色</button>
+                    </div>
+                </div>
+                <div style="margin-bottom: 12px;">
+                    <label style="font-weight: 600; margin-bottom: 6px; display: block; font-size: 0.85em;">目标颜色（替换后的颜色）：</label>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <input type="color" id="colorConvertTargetColor" value="#000000" style="width: 36px; height: 30px; border: 1px solid #ddd; border-radius: 4px; cursor: pointer;">
+                        <span id="colorConvertTargetColorValue" style="font-family: monospace; font-size: 0.85em;">#000000</span>
+                        <button id="pickTargetColorBtn" class="btn btn-secondary" style="padding: 4px 10px; font-size: 0.85em; margin-left: auto;">取色</button>
+                    </div>
+                </div>
+                <button id="executeColorConvertBtn" class="btn btn-primary" style="width: 100%; padding: 6px 12px; font-size: 0.9em;">▶ 执行颜色转换</button>
+            </div>
+        </div>
+
+        <div class="floating-panel" id="colorRemovePanel" style="display: none;">
+            <div class="floating-panel-header" id="colorRemovePanelHeader">
+                <span>🚫 颜色剔除</span>
+                <button class="floating-panel-close" id="closeColorRemoveBtn">×</button>
+            </div>
+            <div class="floating-panel-body">
+                <div style="margin-bottom: 12px;">
+                    <label style="font-weight: 600; margin-bottom: 6px; display: block; font-size: 0.85em;">要剔除的颜色：</label>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <input type="color" id="removeColorPicker" value="#ff0000" style="width: 36px; height: 30px; border: 1px solid #ddd; border-radius: 4px; cursor: pointer;">
+                        <span id="removeColorValue" style="font-family: monospace; font-size: 0.85em;">#ff0000</span>
+                        <button id="pickRemoveColorBtn" class="btn btn-secondary" style="padding: 4px 10px; font-size: 0.85em; margin-left: auto;">取色</button>
+                    </div>
+                </div>
+                <button id="removeColorBtn" class="btn btn-primary" style="width: 100%; padding: 6px 12px; font-size: 0.9em; background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%); border: none;">🚫 剔除选中颜色</button>
+            </div>
+        </div>
+    </main>
+
+    <script src="js/colors.js" defer></script>
+    <script src="js/colorUtils.js" defer></script>
+    <script src="js/i18n.js" defer></script>
+    <script src="modules/Pixelator.js" defer></script>
+    <script src="modules/PerlerGenerator.js" defer></script>
+    <script src="modules/DownloadManager.js" defer></script>
+    <script src="modules/CircularPerlerGenerator.js" defer></script>
+    <script src="modules/CanvasRenderer.js" defer></script>
+    <script src="js/circular-app.js" defer></script>
+</body>
+</html>

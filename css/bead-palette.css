@@ -1,0 +1,323 @@
+/**
+ * BeadPalette - 拼豆色板组件样式
+ * 黑色背景、白色文字、紧凑布局
+ */
+
+.bead-palette {
+    width: 100%;
+    background: #1a1a1a;
+    border: 2px solid #000;
+    border-radius: 4px;
+    overflow: hidden;
+    font-size: 12px;
+}
+
+/* 头部搜索和分类 */
+.bead-palette-header {
+    padding: 8px;
+    border-bottom: 1px solid #333;
+    background: #222;
+}
+
+.bead-palette-search {
+    margin-bottom: 6px;
+}
+
+.bead-search-input {
+    width: 100%;
+    padding: 6px 10px;
+    background: #333;
+    border: 1px solid #444;
+    border-radius: 3px;
+    color: #fff;
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.2s;
+    box-sizing: border-box;
+}
+
+.bead-search-input:focus {
+    border-color: #667eea;
+}
+
+.bead-search-input::placeholder {
+    color: #888;
+}
+
+/* 分类标签 */
+.bead-palette-groups {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+}
+
+.bead-group-tab {
+    padding: 4px 8px;
+    background: #333;
+    border: 1px solid #444;
+    border-radius: 3px;
+    color: #ccc;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+
+.bead-group-tab:hover {
+    background: #444;
+    color: #fff;
+    border-color: #667eea;
+}
+
+.bead-group-tab.active {
+    background: #667eea;
+    color: #fff;
+    border-color: #667eea;
+}
+
+/* 色板主体 */
+.bead-palette-body {
+    padding: 8px;
+    max-height: 280px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #555 #1a1a1a;
+}
+
+.bead-palette-body::-webkit-scrollbar {
+    width: 6px;
+}
+
+.bead-palette-body::-webkit-scrollbar-track {
+    background: #1a1a1a;
+}
+
+.bead-palette-body::-webkit-scrollbar-thumb {
+    background: #555;
+    border-radius: 3px;
+}
+
+.bead-palette-grid {
+    display: grid;
+    gap: 3px;
+}
+
+/* 色块项 */
+.bead-color-item {
+    aspect-ratio: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid transparent;
+    border-radius: 3px;
+    cursor: pointer;
+    position: relative;
+    transition: all 0.15s ease;
+    overflow: hidden;
+}
+
+.bead-color-item:hover {
+    transform: scale(1.08);
+    z-index: 2;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.bead-color-item.active {
+    border-color: #fff;
+    box-shadow: 0 0 0 2px #667eea, 0 2px 8px rgba(102, 126, 234, 0.4);
+    z-index: 3;
+}
+
+.bead-color-name {
+    font-size: 10px;
+    font-weight: 700;
+    text-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+    user-select: none;
+    line-height: 1;
+}
+
+/* 底部信息栏 */
+.bead-palette-footer {
+    padding: 6px 8px;
+    border-top: 1px solid #333;
+    background: #222;
+}
+
+.bead-current-color {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.current-color-swatch {
+    width: 24px;
+    height: 24px;
+    border: 2px solid #555;
+    border-radius: 3px;
+    background: #333;
+    flex-shrink: 0;
+}
+
+.current-color-info {
+    font-size: 12px;
+    color: #fff;
+    font-weight: 600;
+}
+
+/* 紧凑模式 */
+.bead-palette.compact .bead-palette-body {
+    max-height: 200px;
+    padding: 6px;
+}
+
+.bead-palette.compact .bead-palette-grid {
+    gap: 2px;
+}
+
+.bead-palette.compact .bead-color-name {
+    font-size: 9px;
+}
+
+.bead-palette.compact .bead-group-tab {
+    padding: 3px 6px;
+    font-size: 10px;
+}
+
+/* 迷你模式 - 用于小空间 */
+.bead-palette.mini .bead-palette-header {
+    padding: 4px;
+}
+
+.bead-palette.mini .bead-palette-search {
+    display: none;
+}
+
+.bead-palette.mini .bead-palette-body {
+    max-height: 150px;
+    padding: 4px;
+}
+
+.bead-palette.mini .bead-color-name {
+    font-size: 8px;
+}
+
+.bead-palette.mini .bead-palette-footer {
+    padding: 4px 6px;
+}
+
+.bead-palette.mini .current-color-swatch {
+    width: 18px;
+    height: 18px;
+}
+
+.bead-palette.mini .current-color-info {
+    font-size: 10px;
+}
+
+/* 动画 */
+.bead-color-item {
+    animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: scale(0.9);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* 响应式调整 */
+@media (max-width: 480px) {
+    .bead-palette-grid {
+        grid-template-columns: repeat(6, 1fr) !important;
+    }
+}
+
+@media (min-width: 481px) and (max-width: 768px) {
+    .bead-palette-grid {
+        grid-template-columns: repeat(7, 1fr) !important;
+    }
+}
+
+/* 老工作区适配 - 浅色主题 */
+.bead-palette-container {
+    width: 100%;
+    min-height: 180px;
+}
+
+/* 在浅色背景下的色板组件样式 */
+.bead-palette-container .bead-palette {
+    border-color: #ddd;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.bead-palette-container .bead-palette-header {
+    background: #f8f9fa;
+    border-bottom-color: #e0e0e0;
+}
+
+.bead-palette-container .bead-search-input {
+    background: #fff;
+    border-color: #ddd;
+    color: #333;
+}
+
+.bead-palette-container .bead-search-input:focus {
+    border-color: #667eea;
+    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
+}
+
+.bead-palette-container .bead-search-input::placeholder {
+    color: #999;
+}
+
+.bead-palette-container .bead-group-tab {
+    background: #fff;
+    border-color: #ddd;
+    color: #666;
+}
+
+.bead-palette-container .bead-group-tab:hover {
+    background: #f0f0f0;
+    color: #333;
+    border-color: #667eea;
+}
+
+.bead-palette-container .bead-group-tab.active {
+    background: #667eea;
+    color: #fff;
+    border-color: #667eea;
+}
+
+.bead-palette-container .bead-palette-body {
+    background: #fff;
+    scrollbar-color: #ccc #f5f5f5;
+}
+
+.bead-palette-container .bead-palette-body::-webkit-scrollbar-track {
+    background: #f5f5f5;
+}
+
+.bead-palette-container .bead-palette-body::-webkit-scrollbar-thumb {
+    background: #ccc;
+}
+
+.bead-palette-container .bead-palette-footer {
+    background: #f8f9fa;
+    border-top-color: #e0e0e0;
+}
+
+.bead-palette-container .current-color-info {
+    color: #333;
+}
+
+.bead-palette-container .current-color-swatch {
+    border-color: #ccc;
+}
