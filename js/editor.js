@@ -255,6 +255,133 @@
         return r;
     }
 
+    // 两个区域矩形是否相交（边贴边不算重叠）
+    function regionsOverlap(a, b) {
+        return a.x < b.x + b.w && a.x + a.w > b.x &&
+               a.y < b.y + b.h && a.y + a.h > b.y;
+    }
+
+    // 贪心把 r 推出所有重叠区域：沿最小重叠轴反复推，最多 64 轮
+    function resolveRegionOverlap(r) {
+        for (let iter = 0; iter < 64; iter++) {
+            let moved = false;
+            for (const o of W.regions) {
+                if (o.id === r.id) continue;
+                if (!regionsOverlap(r, o)) continue;
+                // 两个方向的"清开距离"：往右推 pushLeft、往左推 pushRight（都是正量）
+                const pushLeft = (o.x + o.w) - r.x;
+                const pushRight = (r.x + r.w) - o.x;
+                const pushTop = (o.y + o.h) - r.y;
+                const pushBottom = (r.y + r.h) - o.y;
+                // 选清开距离更小的轴；往右=+pushLeft，往左=-pushRight
+                const px = pushLeft <= pushRight ? pushLeft : -pushRight;
+                const py = pushTop <= pushBottom ? pushTop : -pushBottom;
+                if (Math.abs(px) <= Math.abs(py)) r.x += px; else r.y += py;
+                moved = true;
+            }
+            if (!moved) break;
+        }
+    }
+
+    // 新建区域：落在不重叠位置，绑定为当前区域，记入历史
+    function addRegion(x, y, w, h, name) {
+        w = clamp(Math.round(w) || 29, MIN_BOARD, MAX_BOARD);
+        h = clamp(Math.round(h) || 29, MIN_BOARD, MAX_BOARD);
+        const r = makeRegion(x, y, w, h, name || '未命名区域');
+        W.regions.push(r);
+        resolveRegionOverlap(r);
+        bindRegion(r);
+        snapshot('新建区域');
+        markDirty();
+        requestRender();
+        return r;
+    }
+
+    // 删除区域：先存撤销（带 cells 快照），再从世界移除、重绑当前区域
+    function deleteRegion(r) {
+        if (!r || W.regions.length <= 1) { toast('至少保留一个区域'); return false; }
+        const idx = W.regions.indexOf(r);
+        if (idx < 0) return false;
+        snapshotRegionDelete(r);                 // 先记撤销（此时 r 还在）
+        W.regions.splice(idx, 1);
+        if (D.id === r.id) {
+            const nb = W.regions[Math.max(0, idx - 1)] || W.regions[0];
+            if (nb) bindRegion(nb);
+        }
+        markDirty();
+        requestRender();
+        return true;
+    }
+
+    // 区域标签的屏幕矩形（绘制与命中检测共用）。
+    // 左边缘对齐区域左边缘；底边压在区域顶线上方；上两角圆角、下两角直角。
+    function regionLabelRect(r) {
+        const cell = view.scale;
+        const rx = view.x + r.x * cell;
+        const ry = view.y + r.y * cell;
+        const h = clamp(cell * 0.78, 15, 22);
+        const font = 12;
+        const padX = 7;
+        const menuW = 16;
+        const text = String(r.id) + (r.name && r.name !== '未命名图纸' && r.name !== '未命名区域' ? ' · ' + r.name : '');
+        ctx.font = `600 ${font}px system-ui, -apple-system, sans-serif`;
+        const textW = ctx.measureText(text).width;
+        const w = padX * 2 + textW + menuW;
+        const x = rx;
+        const y = ry - h - 2;
+        return { x, y, w, h, menuX: x + w - menuW, menuW, text, font, padX };
+    }
+
+    function renameRegion(r, name) {
+        if (!r) return;
+        const next = (name || '').trim() || '未命名区域';
+        snapshot('重命名');              // 先存撤销（此时还是旧名）
+        r.name = next;
+        if (D.id === r.id) { D.name = next; updateDocMeta(); }
+        syncRegionMeta();
+        markDirty();
+        requestRender();
+    }
+
+    // 区域标签菜单：重命名 / 删除
+    let regionMenuEl = null;
+    function closeRegionMenu() {
+        if (regionMenuEl) { regionMenuEl.remove(); regionMenuEl = null; }
+    }
+    function openRegionMenu(r, clientX, clientY) {
+        closeRegionMenu();
+        const el = document.createElement('div');
+        el.className = 'ed-region-menu';
+        el.innerHTML = `
+            <button type="button" data-act="rename">重命名…</button>
+            <button type="button" data-act="delete" class="danger">删除区域</button>`;
+        el.style.left = Math.min(clientX, window.innerWidth - 160) + 'px';
+        el.style.top = Math.min(clientY + 6, window.innerHeight - 80) + 'px';
+        el.addEventListener('click', (ev) => {
+            const act = ev.target.getAttribute('data-act');
+            if (act === 'rename') {
+                const v = window.prompt('区域名称', r.name && r.name !== '未命名区域' ? r.name : '');
+                if (v !== null) renameRegion(r, v);
+            } else if (act === 'delete') {
+                if (window.confirm('删除区域「' + (r.name || r.id) + '」？此操作可撤销。')) {
+                    deleteRegion(r);
+                }
+            }
+            closeRegionMenu();
+        });
+        document.body.appendChild(el);
+        regionMenuEl = el;
+        // 点别处关闭
+        setTimeout(() => {
+            window.addEventListener('pointerdown', function onAway(ev) {
+                if (regionMenuEl && !regionMenuEl.contains(ev.target)) {
+                    closeRegionMenu();
+                    window.removeEventListener('pointerdown', onAway);
+                }
+            }, true);
+        }, 0);
+    }
+
     // 调色板缓存：code -> { code, hex, rgb, series }
     let PAL = [];
     let PAL_MAP = new Map();
@@ -1094,8 +1221,82 @@
 
         syncBoardFrame();
 
+        // 多区域标签（外置左上角，常驻最上层）——必须在画板之后画，压住其它区域
+        drawRegionLabels();
+
         // 小窗跟着视口一起更新（独立的 DOM canvas，不进主画布像素）
         drawMinimap();
+    }
+
+    /* 每个区域在左上角外部画一个标签：底边贴区域顶线、上两角圆角、下两角直角、
+       半透明、深字白描边、常驻最上层。还画「创建区域」的拖拽预览。 */
+    function drawRegionLabels() {
+        ctx.save();
+        ctx.textBaseline = 'middle';
+        for (const r of W.regions) {
+            const L = regionLabelRect(r);
+            const isCur = r.id === D.id;
+            const rad = 6;
+
+            ctx.beginPath();
+            ctx.moveTo(L.x, L.y + L.h);
+            ctx.lineTo(L.x, L.y + rad);
+            ctx.quadraticCurveTo(L.x, L.y, L.x + rad, L.y);
+            ctx.lineTo(L.x + L.w - rad, L.y);
+            ctx.quadraticCurveTo(L.x + L.w, L.y, L.x + L.w, L.y + rad);
+            ctx.lineTo(L.x + L.w, L.y + L.h);
+            ctx.closePath();
+
+            ctx.fillStyle = r.color;
+            ctx.globalAlpha = isCur ? 0.95 : 0.82;
+            ctx.fill();
+            ctx.globalAlpha = 1;
+
+            // 当前区域描一道亮边，标示"你在这"
+            if (isCur) {
+                ctx.strokeStyle = 'rgba(255,255,255,.9)';
+                ctx.lineWidth = 1.4;
+                ctx.stroke();
+            }
+
+            // 文字：深字 + 白描边，保证在彩色底/白底上都清楚
+            ctx.font = `600 ${L.font}px system-ui, -apple-system, sans-serif`;
+            ctx.textAlign = 'left';
+            ctx.lineJoin = 'round';
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = 'rgba(255,255,255,.9)';
+            ctx.strokeText(L.text, L.x + L.padX, L.y + L.h / 2);
+            ctx.fillStyle = 'rgba(20,22,26,.92)';
+            ctx.fillText(L.text, L.x + L.padX, L.y + L.h / 2);
+
+            // 右侧菜单点「⋮」
+            ctx.beginPath();
+            ctx.arc(L.menuX + L.menuW / 2 - 1, L.y + L.h / 2 - 3, 1.1, 0, Math.PI * 2);
+            ctx.arc(L.menuX + L.menuW / 2 - 1, L.y + L.h / 2, 1.1, 0, Math.PI * 2);
+            ctx.arc(L.menuX + L.menuW / 2 - 1, L.y + L.h / 2 + 3, 1.1, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(20,22,26,.7)';
+            ctx.fill();
+        }
+
+        // 创建区域拖拽预览（虚线矩形）
+        if (drag && drag.mode === 'regionDraw') {
+            const cell = view.scale;
+            const x0 = Math.min(drag.anchor.c, drag.cur.c);
+            const y0 = Math.min(drag.anchor.r, drag.cur.r);
+            const x1 = Math.max(drag.anchor.c, drag.cur.c) + 1;
+            const y1 = Math.max(drag.anchor.r, drag.cur.r) + 1;
+            const px = view.x + x0 * cell, py = view.y + y0 * cell;
+            const pw = (x1 - x0) * cell, ph = (y1 - y0) * cell;
+            ctx.strokeStyle = 'rgba(108,76,241,.95)';
+            ctx.fillStyle = 'rgba(108,76,241,.10)';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([6, 4]);
+            ctx.fillRect(px, py, pw, ph);
+            ctx.strokeRect(px + .5, py + .5, pw - 1, ph - 1);
+            ctx.setLineDash([]);
+        }
+
+        ctx.restore();
     }
 
     /* =========================================================
@@ -1715,6 +1916,31 @@
         });
     }
 
+    // 多区域面板：添加 / 重命名
+    if ($('regionAddBtn')) {
+        $('regionAddBtn').addEventListener('click', () => {
+            const w = clamp(Number($('regionCols').value) || 29, MIN_BOARD, MAX_BOARD);
+            const h = clamp(Number($('regionRows').value) || 29, MIN_BOARD, MAX_BOARD);
+            // 排到现有区域外接矩形的右侧（留 4 格间隙）；addRegion 内部会再防重叠
+            const b = worldBounds();
+            const x = b ? b.x1 + 4 : 0;
+            const y = b ? b.y0 : 0;
+            const r = addRegion(x, y, w, h);
+            toast(`已新建区域 ${r.id}（${w} × ${h}）`);
+        });
+        $('regionCols').addEventListener('keydown', e => { if (e.key === 'Enter') $('regionRows').focus(); });
+        $('regionRows').addEventListener('keydown', e => { if (e.key === 'Enter') $('regionAddBtn').click(); });
+    }
+    if ($('regionRenameBtn')) {
+        $('regionRenameBtn').addEventListener('click', () => {
+            const cur = currentRegion();
+            if (!cur) return;
+            renameRegion(cur, $('regionName').value);
+            toast('已重命名');
+        });
+        $('regionName').addEventListener('keydown', e => { if (e.key === 'Enter') $('regionRenameBtn').click(); });
+    }
+
     function roundRect(c, x, y, w, h, r) {
         const rr = Math.min(r, w / 2, h / 2);
         c.beginPath();
@@ -2129,18 +2355,81 @@
 
     const history = { stack: [], index: -1 };
 
+    /* 区域几何快照（不含 cells：cells 由 live 数组持有，
+       只有"删除区域"才会额外存一份 cells 用于复活）。 */
+    function geomOf(r) {
+        return {
+            id: r.id, x: r.x, y: r.y, w: r.w, h: r.h,
+            name: r.name, color: r.color,
+            local: r.local ? {
+                pos: (r.local.pos || []).slice(),
+                rot: (r.local.rot || []).slice(),
+                flipX: !!r.local.flipX
+            } : null
+        };
+    }
+
+    // 复活被删区域时，从它"之后"的条目里找被删时存下的 cells
+    function findForwardCells(id, fromIndex) {
+        for (let j = fromIndex + 1; j < history.stack.length; j++) {
+            const d = history.stack[j].deletedRegion;
+            if (d && d.id === id) return d.cells.slice();
+        }
+        return null;
+    }
+
+    /* 统一历史栈：格子编辑 + 区域结构变更（增/删/移动）进同一栈。
+       每个条目同时记录：① 当前区域的格子（cell 层）② 所有区域的几何（region 层）
+       ③ 当前区域 id。撤销时两层一起回滚。
+       只有"删除区域"才额外存 cells 快照（规则：仅删区域存 cells）。 */
     function snapshot(label) {
         history.stack = history.stack.slice(0, history.index + 1);
+        const allCells = {};
+        for (const r of W.regions) allCells[r.id] = r.cells.slice();
         history.stack.push({
             label,
-            cols: D.cols,
-            rows: D.rows,
-            grid: D.grid.slice(),
-            // 草稿也要进历史，否则画在区域外的笔画撤不回来。
-            // 用扁平数组而不是 Map 快照：序列化后体积小，而且不会被后续修改带坏。
-            drafts: serializeDrafts()
+            curId: D.id,
+            regions: W.regions.map(geomOf),
+            allCells,
+            drafts: serializeDrafts(),
+            deletedRegion: null
         });
-        if (history.stack.length > MAX_UNDO) history.stack.shift();
+        if (history.stack.length > MAX_UNDO) { history.stack.shift(); history.index--; }
+        history.index = history.stack.length - 1;
+        updateHistoryButtons();
+        updateDocMeta();
+        renderStats();
+        markDirty();
+    }
+
+    /* 删除区域专用快照：记录"删之后"的几何（不含被删区域），
+       并把被删区域的完整 cells 存进 deletedRegion，供撤销复活。 */
+    function snapshotRegionDelete(r) {
+        const remain = W.regions.filter(x => x.id !== r.id);
+        const stay = remain[0] || null;
+        const stayId = (D.id === r.id) ? (stay ? stay.id : null) : D.id;
+        const allCells = {};
+        for (const x of remain) allCells[x.id] = x.cells.slice();
+
+        history.stack = history.stack.slice(0, history.index + 1);
+        history.stack.push({
+            label: '删除区域',
+            curId: stayId,
+            regions: remain.map(geomOf),
+            allCells,
+            drafts: serializeDrafts(),
+            deletedRegion: {
+                id: r.id, x: r.x, y: r.y, w: r.w, h: r.h,
+                cells: r.cells.slice(),
+                color: r.color, name: r.name, createdAt: r.createdAt,
+                local: r.local ? {
+                    pos: (r.local.pos || []).slice(),
+                    rot: (r.local.rot || []).slice(),
+                    flipX: !!r.local.flipX
+                } : null
+            }
+        });
+        if (history.stack.length > MAX_UNDO) { history.stack.shift(); history.index--; }
         history.index = history.stack.length - 1;
         updateHistoryButtons();
         updateDocMeta();
@@ -2151,11 +2440,63 @@
     function restore(i) {
         const s = history.stack[i];
         if (!s) return;
-        D.cols = s.cols;
-        D.rows = s.rows;
-        D.grid = s.grid.slice();
+
+        // ---- region 层：让 live 集合与 s.regions 一致，并同步几何 ----
+        const entryById = new Map();
+        for (const g of s.regions) entryById.set(g.id, g);
+
+        // 1) 移除 live 有、entry 没有的区域（之后新增的，撤销应删掉）
+        W.regions = W.regions.filter(r => entryById.has(r.id));
+
+        // 2) cell 层：先把本条目记录的格子写回"已存在"的区域
+        //    （必须先于复活循环，否则复活区刚从 findForwardCells 取回的 cells 会被旧 allCells 冲掉）
+        for (const r of W.regions) {
+            const g = entryById.get(r.id);
+            if (g && s.allCells && s.allCells[r.id]) {
+                r.cells = s.allCells[r.id].slice();
+                r.w = g.w; r.h = g.h;
+            }
+        }
+
+        // 3) 补回 entry 有、live 没有的区域（被删的，撤销应复活）
+        for (const g of s.regions) {
+            if (regionById(g.id)) {
+                const r = regionById(g.id);
+                r.x = g.x; r.y = g.y; r.w = g.w; r.h = g.h;
+                r.name = g.name; r.color = g.color;
+                r.local = g.local ? {
+                    pos: (g.local.pos || [0, 0, 0]).slice(),
+                    rot: (g.local.rot || [0, 0, 0]).slice(),
+                    flipX: !!g.local.flipX
+                } : r.local;
+                continue;
+            }
+            // 复活：cells 优先取"之后"被删时存的快照（含删除前刚画的内容），
+            // 否则取本条目里存的 cells，再不行给空板
+            const cells = findForwardCells(g.id, i)
+                || (s.allCells && s.allCells[g.id] ? s.allCells[g.id].slice() : null)
+                || new Array(g.w * g.h).fill('');
+            const nr = makeRegion(g.x, g.y, g.w, g.h, g.name);
+            nr.id = g.id;
+            nr.cells = cells;
+            nr.color = g.color;
+            nr.createdAt = Date.now();
+            nr.local = g.local ? {
+                pos: (g.local.pos || [0, 0, 0]).slice(),
+                rot: (g.local.rot || [0, 0, 0]).slice(),
+                flipX: !!g.local.flipX
+            } : { pos: [0, 0, 0], rot: [0, 0, 0], flipX: false };
+            W.regions.push(nr);
+        }
+        W.nextId = Math.max(W.nextId, W.regions.reduce((m, r) => Math.max(m, r.id + 1), 1));
+
+        // ---- 绑定当前区域 ----
+        const b = regionById(s.curId) || W.regions[0] || null;
+        if (b) bindRegion(b);
+        else { D.id = 0; D.x = 0; D.y = 0; D.cols = 1; D.rows = 1; D.grid = ['']; D.name = '未命名图纸'; }
+
         loadDrafts(s.drafts);
-        syncRegionMeta();
+
         history.index = i;
         state.select = null;
         updateDocMeta();
@@ -3180,6 +3521,9 @@
 
     canvas.addEventListener('pointerdown', (e) => {
         const { c, r } = toCell(e.clientX, e.clientY);
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
 
         // 中键 / 空格 → 平移
         if (e.button === 1 || state.spaceDown) {
@@ -3193,7 +3537,36 @@
             return;
         }
 
+        // 多区域标签命中检测（常驻最上层，优先于任何工具）
+        if (e.button === 0) {
+            for (let i = W.regions.length - 1; i >= 0; i--) {
+                const rr = W.regions[i];
+                const L = regionLabelRect(rr);
+                if (mx >= L.x && mx <= L.x + L.w && my >= L.y && my <= L.y + L.h) {
+                    if (mx >= L.menuX && mx <= L.menuX + L.menuW) {
+                        openRegionMenu(rr, e.clientX, e.clientY);
+                    } else {
+                        drag = { mode: 'label', region: rr, sx: e.clientX, sy: e.clientY, ox: rr.x, oy: rr.y, moved: false };
+                        state.hover = null;
+                        canvas.setPointerCapture(e.pointerId);
+                        e.preventDefault();
+                        requestRender();
+                    }
+                    return;
+                }
+            }
+        }
+
         if (e.button !== 0) return;
+
+        // 区域命令：在画布拖拽框选一块来创建新区域
+        if (state.cmd === 'region') {
+            drag = { mode: 'regionDraw', anchor: { c, r }, cur: { c, r } };
+            canvas.setPointerCapture(e.pointerId);
+            e.preventDefault();
+            requestRender();
+            return;
+        }
 
         // 没选工具（再点一次当前工具＝释放）时，左键拖动就是平移画布
         if (!state.tool) {
@@ -3262,6 +3635,8 @@
                     // 第一个顶点就锁定合并方式，中途改修饰键不影响这一笔
                     if (!pts.length) {
                         if (op === 'sub' && !state.select) { toast('还没有选区，没东西可减'); break; }
+                        // 选区必须落在当前区域内（禁止跨区域框选）
+                        if (!localOf(c, r)) { toast('选区必须从当前区域内开始'); break; }
                         state.polyOp = op;
                     }
                     const first = pts[0];
@@ -3279,6 +3654,9 @@
                 }
 
                 if (op === 'sub' && !state.select) { toast('还没有选区，没东西可减'); break; }
+
+                // 选区必须从当前区域内开始（禁止跨区域框选）
+                if (!localOf(c, r)) { toast('选区必须从当前区域内开始'); break; }
 
                 drag = {
                     mode: 'select', shape, op,
@@ -3321,8 +3699,28 @@
         if (!drag) return;
 
         if (drag.mode === 'pan') {
+            if (e.clientX !== drag.sx || e.clientY !== drag.sy) drag.moved = true;
             view.x = drag.ox + (e.clientX - drag.sx);
             view.y = drag.oy + (e.clientY - drag.sy);
+            requestRender();
+            return;
+        }
+
+        // 拖拽区域标签 = 移动该区域（落点防重叠在抬手时处理）
+        if (drag.mode === 'label') {
+            const dx = Math.round((e.clientX - drag.sx) / view.scale);
+            const dy = Math.round((e.clientY - drag.sy) / view.scale);
+            if (dx !== 0 || dy !== 0) drag.moved = true;
+            drag.region.x = drag.ox + dx;
+            drag.region.y = drag.oy + dy;
+            requestRender();
+            return;
+        }
+
+        // 拖拽创建新区域：实时更新预览矩形
+        if (drag.mode === 'regionDraw') {
+            const p = toCell(e.clientX, e.clientY);
+            drag.cur = { c: p.c, r: p.r };
             requestRender();
             return;
         }
@@ -3375,6 +3773,48 @@
     function endDrag(e) {
         if (!drag) return;
         const mode = drag.mode;
+
+        // 空闲（无工具/无命令）下的一次纯点击 = 切换到点中的区域
+        if (mode === 'pan' && !drag.moved && !state.tool && !state.cmd) {
+            const p = e ? toCell(e.clientX, e.clientY) : { c: 0, r: 0 };
+            const hit = regionAt(p.c, p.r);
+            if (hit && hit.id !== D.id) { bindRegion(hit); markDirty(); requestRender(); }
+        }
+
+        // 拖拽区域标签：未移动＝点击切换；移动过＝落点防重叠后提交
+        if (mode === 'label') {
+            if (!drag.moved) {
+                if (drag.region.id !== D.id) { bindRegion(drag.region); markDirty(); }
+            } else {
+                resolveRegionOverlap(drag.region);
+                syncRegionMeta();
+                snapshot('移动区域');
+            }
+            drag = null;
+            state.panning = false;
+            canvas.classList.remove('is-panning');
+            try { canvas.releasePointerCapture(e.pointerId); } catch (_) { }
+            requestRender();
+            return;
+        }
+
+        // 拖拽创建新区域：纯点击（没拖动）不建区域
+        if (mode === 'regionDraw') {
+            const a = drag.anchor, b = drag.cur;
+            const isClick = a.c === b.c && a.r === b.r;
+            drag = null;
+            state.panning = false;
+            canvas.classList.remove('is-panning');
+            try { canvas.releasePointerCapture(e.pointerId); } catch (_) { }
+            if (!isClick) {
+                const x = Math.min(a.c, b.c), y = Math.min(a.r, b.r);
+                const w = Math.abs(b.c - a.c) + 1, h = Math.abs(b.r - a.r) + 1;
+                addRegion(x, y, w, h);
+            } else {
+                requestRender();
+            }
+            return;
+        }
 
         if (mode === 'paint' && drag.changed) {
             const label = state.tool === 'razor' ? '剃刀' : '画笔';
@@ -3528,6 +3968,7 @@
         { id: 'picker', name: '取色器', emoji: '💧', kind: 'tool' },
         { sep: true },
         { id: 'canvas', name: '画布', emoji: '🔲', kind: 'cmd' },
+        { id: 'region', name: '区域', emoji: '🗺️', kind: 'cmd' },
         { id: 'colorConvert', name: '颜色转换', emoji: '🔄', kind: 'cmd' },
         { id: 'colorRemove', name: '颜色剔除', emoji: '🚫', kind: 'cmd' },
         { id: 'quantize', name: '颜色量化', emoji: '🎯', kind: 'cmd' },
@@ -4119,6 +4560,15 @@
                 $('bdStat').textContent = `当前 ${D.cols}×${D.rows} → ${nw}×${nh}`;
             }
             $('bdPad').value = cmdState.bd.pad;
+        }
+
+        if (id === 'region') {
+            const cur = currentRegion();
+            if (cur) {
+                $('regionCurMeta').textContent = `区域 ${cur.id} · ${cur.w}×${cur.h} · 共 ${W.regions.length} 个区域`;
+                const nameInput = $('regionName');
+                if (document.activeElement !== nameInput) nameInput.value = (cur.name && cur.name !== '未命名区域') ? cur.name : '';
+            }
         }
     }
 
@@ -5674,6 +6124,12 @@
                 draftCount, serializeDrafts, loadDrafts, getDraft,
                 miniMap, miniSetup, drawMinimap, miniComputeBounds, miniJumpTo, miniJumpToWorld,
                 flip, trimBounds, cropToSel,
+                // 多区域
+                addRegion, deleteRegion, renameRegion, resolveRegionOverlap, regionsOverlap,
+                regionLabelRect, currentRegion, openRegionMenu, closeRegionMenu,
+                undo, redo, history, snapshotRegionDelete,
+                setCmd: (id) => setCmd(id), setTool: (id) => setTool(id),
+                switchRegion: (r) => { if (r) { bindRegion(r); markDirty(); requestRender(); } },
                 // 持久化
                 serializeWorld, restoreWorld, markDirty, flushSave, saveWorldNow, cancelPendingSave,
                 store: window.WorldStore,

@@ -295,6 +295,35 @@
                         </div>
                     </section>
 
+                    <!-- ============ 命令：区域（多区域） ============ -->
+                    <section class="ip-sec" data-panel="cmd:region">
+                        <div class="ip-title">多区域</div>
+
+                        <div class="size-row">
+                            <label class="size-field">
+                                <span>宽</span>
+                                <input class="tp-input" type="number" id="regionCols" min="5" max="200" step="1" value="29" inputmode="numeric">
+                            </label>
+                            <span class="size-x">×</span>
+                            <label class="size-field">
+                                <span>高</span>
+                                <input class="tp-input" type="number" id="regionRows" min="5" max="200" step="1" value="29" inputmode="numeric">
+                            </label>
+                            <span class="size-unit">格</span>
+                        </div>
+
+                        <button class="tp-btn tp-btn-primary" id="regionAddBtn" type="button">＋ 添加区域</button>
+                        <p class="cmd-hint">新区域会自动排到不重叠的位置。也可选「区域」后在画布上拖拽框选一块范围来创建。</p>
+
+                        <div class="ip-title ip-title-gap">当前区域</div>
+                        <div class="size-meta" id="regionCurMeta">—</div>
+                        <div class="tp-row">
+                            <span class="tp-label">名称</span>
+                            <input class="tp-input" type="text" id="regionName" placeholder="未命名区域" spellcheck="false">
+                        </div>
+                        <button class="tp-btn" id="regionRenameBtn" type="button">重命名当前区域</button>
+                    </section>
+
                     <!-- ============ 命令：颜色转换 ============ -->
                     <section class="ip-sec" data-panel="cmd:colorConvert">
                         <div class="ip-title">颜色转换</div>

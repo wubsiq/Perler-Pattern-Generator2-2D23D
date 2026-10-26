@@ -3270,3 +3270,58 @@ body.editor {
         padding: 6px !important;
     }
 }
+
+/* ===== 多区域：面板按钮 & 标签菜单 ===== */
+.tp-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    width: 100%;
+    min-height: 30px;
+    padding: 6px 12px;
+    margin-top: 4px;
+    border: 1px solid var(--line-2, #d7d9e0);
+    border-radius: 8px;
+    background: var(--surface, #fff);
+    color: var(--ink, #2a2d34);
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1.2;
+    transition: background .14s, border-color .14s;
+}
+.tp-btn:hover { background: var(--surface-2, #f1f2f6); border-color: var(--line-3, #c2c5cf); }
+.tp-btn-primary {
+    background: var(--brand, #6c4cf1);
+    border-color: var(--brand, #6c4cf1);
+    color: #fff;
+}
+.tp-btn-primary:hover { background: var(--brand-hover, #5a3ad6); border-color: var(--brand-hover, #5a3ad6); }
+
+/* 区域标签右键/点击菜单（浮层） */
+.ed-region-menu {
+    position: fixed;
+    z-index: 9999;
+    min-width: 140px;
+    padding: 5px;
+    background: #fff;
+    border: 1px solid rgba(20,22,26,.12);
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(20,22,26,.18);
+    font-size: 13px;
+    color: #2a2d34;
+}
+.ed-region-menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 7px 10px;
+    border: 0;
+    background: transparent;
+    border-radius: 7px;
+    cursor: pointer;
+    font-size: 13px;
+    color: inherit;
+}
+.ed-region-menu button:hover { background: #f1f2f6; }
+.ed-region-menu button.danger:hover { background: #fdecec; color: #d6453f; }
