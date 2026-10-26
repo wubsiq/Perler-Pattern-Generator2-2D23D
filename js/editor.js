@@ -76,13 +76,184 @@
      * 1. 文档
      * ========================================================= */
 
+    /* ---------------------------------------------------------
+     * 世界 / 区域
+     *
+     * 坐标系说明（改多区域时踩过的地方，先写清楚）：
+     *   世界坐标 = 格子整数坐标，可以为负。格 (x,y) 占 [x,x+1]×[y,y+1]。
+     *   屏幕坐标 = 世界坐标 × view.scale + (view.x, view.y)
+     *
+     *   D 不是"整个文档"，而是"**当前区域**的别名"：
+     *     D.grid  → region.cells（同一个数组引用，不拷贝）
+     *     D.cols  → region.w
+     *     D.rows  → region.h
+     *     D.x/y   → region 左上角的世界坐标
+     *
+     *   这么设计是为了让 D.x=D.y=0 时，整个编辑器（44 处 D.grid[...]
+     *   和 250 处 D.cols/D.rows）行为与"单图纸"时代完全一致，
+     *   多区域只是把 D 重新绑定到另一个 region 上。
+     * --------------------------------------------------------- */
+
+    const W = {
+        nextId: 1,
+        regions: []
+    };
+
+    // 区域边框/标签的取色顺序（避开调色板里常用的豆子色，免得看不出来）
+    const REGION_COLORS = [
+        '#185FA5', '#0F6E56', '#854F0B', '#993556',
+        '#534AB7', '#A32D2D', '#3B6D11', '#0C447C'
+    ];
+
     const D = {
+        id: 0,
+        x: 0,               // 区域左上角世界坐标（多区域时非 0）
+        y: 0,
         cols: 29,
         rows: 29,
         grid: [],
         palette: 'mard221',
         name: '未命名图纸'
     };
+
+    function makeRegion(x, y, w, h, name) {
+        return {
+            id: W.nextId++,
+            x, y, w, h,
+            cells: new Array(w * h).fill(''),
+            color: REGION_COLORS[(W.nextId - 2) % REGION_COLORS.length],
+            name: name || '未命名图纸',
+            createdAt: Date.now(),
+            // 3D 里的实例变换：位置 / 旋转 / 水平镜像
+            local: { pos: [0, 0, 0], rot: [0, 0, 0], flipX: false }
+        };
+    }
+
+    // 把 D 重新指向某个区域（D.cells/grid 是同一个数组引用，改哪边都是改它）
+    function bindRegion(r) {
+        D.id = r.id;
+        D.x = r.x;
+        D.y = r.y;
+        D.cols = r.w;
+        D.rows = r.h;
+        D.grid = r.cells;
+        D.name = r.name;
+    }
+
+    // 把 D 上被改过的元信息写回区域。
+    // cells 也要写：改画布尺寸时会换一个新数组（rebuildGrid），不跟就会留两份数据。
+    function syncRegionMeta() {
+        const r = regionById(D.id);
+        if (!r) return;
+        r.x = D.x;
+        r.y = D.y;
+        r.w = D.cols;
+        r.h = D.rows;
+        r.cells = D.grid;
+        r.name = D.name;
+    }
+
+    function regionById(id) {
+        for (let i = 0; i < W.regions.length; i++) {
+            if (W.regions[i].id === id) return W.regions[i];
+        }
+        return null;
+    }
+
+    /* ---------------------------------------------------------
+     * 坐标系约定（全文件只有这一处转换，别再手写减法）
+     *
+     *   世界坐标 world：无限画布上的整数格坐标，可以是负数。
+     *     指针交互、hover、多边形顶点、拖拽路径、草稿区都用它。
+     *
+     *   局部坐标 local：当前区域内的 0..cols / 0..rows。
+     *     D.grid、选区遮罩、区域内部遍历都用它。
+     *
+     *   toLocal(wc,wr)  世界 → 局部（纯平移，不查边界）
+     *   localOf(wc,wr)  世界 → 局部（不在当前区域内返回 null）
+     *   gidx(wc,wr)     世界 → D.grid 下标（越界返回 -1）
+     * --------------------------------------------------------- */
+
+    /**
+     * 世界坐标 → D.grid 的下标。越界返回 -1。
+     *
+     * D.grid[-1] 是 undefined，跟"空格"读出来一样，所以现有那批
+     * `const code = D.grid[gidx(c,r)]; if (!code) continue;`
+     * 的写法天然兼容越界，不用到处加判断。
+     *
+     * 注意：参数是**世界坐标**。区域内部的局部坐标要自己减 D.x/D.y。
+     */
+    function gidx(c, r) {
+        const lx = c - D.x;
+        const ly = r - D.y;
+        if (lx < 0 || ly < 0 || lx >= D.cols || ly >= D.rows) return -1;
+        return ly * D.cols + lx;
+    }
+
+    /** 世界坐标 → 当前区域的局部坐标（纯平移，不管有没有越界）。 */
+    function toLocal(wc, wr) {
+        return { c: wc - D.x, r: wr - D.y };
+    }
+
+    /**
+     * 局部坐标 → D.grid / 选区遮罩的下标。
+     *
+     * D.grid 和 state.select.mask 都是 cols*rows 的紧凑数组，
+     * 所以区域内一律用局部坐标 + 这个函数取下标，别再手写 r * D.cols + c。
+     */
+    function lidx(c, r) {
+        return r * D.cols + c;
+    }
+
+    /**
+     * 世界坐标 → 当前区域的局部坐标。不在区域内返回 null。
+     *
+     * 选区 mask 跟 D.grid 同尺寸（天然按局部下标排），所以从指针进来的
+     * 世界坐标要先过这里再进选区那一套。
+     */
+    function localOf(wc, wr) {
+        const c = wc - D.x;
+        const r = wr - D.y;
+        if (c < 0 || r < 0 || c >= D.cols || r >= D.rows) return null;
+        return { c, r };
+    }
+
+    // D 当前指向的区域对象（cells 与 D.grid 是同一个数组引用）
+    function currentRegion() {
+        return regionById(D.id);
+    }
+
+    // 命中的区域（后加的在上层，所以倒着找）
+    function regionAt(wx, wy) {
+        for (let i = W.regions.length - 1; i >= 0; i--) {
+            const r = W.regions[i];
+            if (wx >= r.x && wy >= r.y && wx < r.x + r.w && wy < r.y + r.h) return r;
+        }
+        return null;
+    }
+
+    // 全部区域的外接矩形（小窗和相机适配用）
+    function worldBounds() {
+        if (!W.regions.length) return null;
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        for (const r of W.regions) {
+            if (r.x < x0) x0 = r.x;
+            if (r.y < y0) y0 = r.y;
+            if (r.x + r.w > x1) x1 = r.x + r.w;
+            if (r.y + r.h > y1) y1 = r.y + r.h;
+        }
+        return { x0, y0, x1, y1, w: x1 - x0, h: y1 - y0 };
+    }
+
+    // 接管当前 D 里的内容当成第一个区域（不拷贝数组）
+    function ensureRegion() {
+        if (W.regions.length) return W.regions[0];
+        const r = makeRegion(0, 0, D.cols, D.rows, D.name);
+        r.cells = D.grid;
+        W.regions.push(r);
+        bindRegion(r);
+        return r;
+    }
 
     // 调色板缓存：code -> { code, hex, rgb, series }
     let PAL = [];
@@ -120,6 +291,7 @@
             } else {
                 D.name = '未命名图纸';
             }
+            ensureRegion();
             return;
         }
 
@@ -136,6 +308,7 @@
 
                 // 补齐色卡里可能缺的色号
                 D.grid = D.grid.map(code => (code && !PAL_MAP.has(code)) ? '' : code);
+                ensureRegion();
                 return;
             } catch (_) { }
         }
@@ -145,6 +318,7 @@
         D.rows = 29;
         D.grid = new Array(D.cols * D.rows).fill('');
         buildPalette(D.palette);
+        ensureRegion();
     }
 
     function drawDemoHeart() {
@@ -156,7 +330,7 @@
                 // canvas 的 r 向下增大，取负才是数学坐标（心尖朝下）
                 const y = -((r - (D.rows - 1) / 2) / (D.rows * 0.34));
                 const v = Math.pow(x * x + y * y - 1, 3) - x * x * Math.pow(y, 3);
-                if (v <= 0) D.grid[r * D.cols + c] = mid;
+                if (v <= 0) D.grid[lidx(c, r)] = mid;
             }
         }
     }
@@ -272,6 +446,127 @@
      * 4. 绘制
      * ========================================================= */
 
+    /**
+     * 无限背景网格。
+     *
+     * 区域外也要有格子感——否则平移出去就是一片空白，用户不知道自己还在不在
+     * 画布上，也不知道离图纸多远。这条网格只负责"感觉"，不承载任何数据。
+     *
+     * 间距按缩放分级：格子小的时候跳 5 格画，再小就不画
+     * （每格都画会糊成一片灰，反而更脏）。
+     */
+    function drawWorldGrid(W, H, cell) {
+        const step = cell >= 12 ? 1 : (cell >= 6 ? 5 : 0);
+        if (!step) return;
+
+        // 屏幕四边对应的世界坐标（可以为负）
+        const w0 = -view.x / cell;
+        const w1 = (W - view.x) / cell;
+        const h0 = -view.y / cell;
+        const h1 = (H - view.y) / cell;
+
+        // 数量保护：极端缩放 + 超宽屏时别把几万条线全画出来
+        if ((w1 - w0) / step > 900 || (h1 - h0) / step > 900) return;
+
+        const startC = Math.floor(w0 / step) * step;
+        const startR = Math.floor(h0 / step) * step;
+
+        ctx.save();
+        ctx.strokeStyle = step === 1 ? 'rgba(20,22,26,.055)' : 'rgba(20,22,26,.085)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let c = startC; c * cell + view.x <= W; c += step) {
+            const x = Math.round(view.x + c * cell) + .5;
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, H);
+        }
+        for (let r = startR; r * cell + view.y <= H; r += step) {
+            const y = Math.round(view.y + r * cell) + .5;
+            ctx.moveTo(0, y);
+            ctx.lineTo(W, y);
+        }
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    /**
+     * 画一颗豆子。x/y 是格子左上角的屏幕坐标。
+     * 区域内的豆子和草稿区的豆子共用这一套画法，两边看起来才一致。
+     */
+    function drawBead(x, y, cell, code, drawCodes) {
+        const p = PAL_MAP.get(code);
+        if (!p) return;
+
+        // 单色提亮：非目标色统一画成淡灰，保留形状但不抢眼
+        if (state.focus && code !== state.focus) {
+            ctx.fillStyle = '#E7E8EC';
+            if (cell >= 10) {
+                ctx.beginPath();
+                roundRect(ctx, x + 0.5, y + 0.5, cell - 1, cell - 1, Math.min(cell * 0.22, 4));
+                ctx.fill();
+            } else {
+                ctx.fillRect(x, y, cell, cell);
+            }
+            return;
+        }
+
+        ctx.fillStyle = p.hex;
+        if (cell >= 10) {
+            ctx.beginPath();
+            const rad = Math.min(cell * 0.22, 4);
+            roundRect(ctx, x + 0.5, y + 0.5, cell - 1, cell - 1, rad);
+            ctx.fill();
+        } else {
+            ctx.fillRect(x, y, cell, cell);
+        }
+
+        if (drawCodes) {
+            ctx.fillStyle = luminance(p.hex) > 0.62 ? 'rgba(0,0,0,.68)' : 'rgba(255,255,255,.82)';
+            ctx.font = `600 ${Math.floor(cell * 0.34)}px system-ui, -apple-system, sans-serif`;
+            ctx.fillText(code, x + cell / 2, y + cell / 2 + 0.5);
+        }
+    }
+
+    /**
+     * 画草稿区（区域外的散画）。
+     * 按块遍历，只碰有内容的块，所以草稿再多也不会拖慢平移。
+     * 整体压到 0.8 不透明度：一眼能看出"这些还不是图纸"，跟区域里的成品区分开。
+     */
+    function drawDrafts(cell, W, H) {
+        if (!drafts.size) return;
+
+        const c0 = Math.floor(-view.x / cell);
+        const c1 = Math.ceil((W - view.x) / cell);
+        const r0 = Math.floor(-view.y / cell);
+        const r1 = Math.ceil((H - view.y) / cell);
+
+        const bx0 = Math.floor(c0 / DRAFT_CHUNK), bx1 = Math.floor(c1 / DRAFT_CHUNK);
+        const by0 = Math.floor(r0 / DRAFT_CHUNK), by1 = Math.floor(r1 / DRAFT_CHUNK);
+
+        const drawCodes = cell >= 20;
+        ctx.save();
+        ctx.globalAlpha = 0.8;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        for (let cy = by0; cy <= by1; cy++) {
+            for (let cx = bx0; cx <= bx1; cx++) {
+                const ch = drafts.get(draftChunkKey(cx, cy));
+                if (!ch) continue;
+                const baseX = cx * DRAFT_CHUNK;
+                const baseY = cy * DRAFT_CHUNK;
+
+                for (const [li, code] of ch) {
+                    const wx = baseX + (li % DRAFT_CHUNK);
+                    const wy = baseY + Math.floor(li / DRAFT_CHUNK);
+                    if (wx < c0 || wx >= c1 || wy < r0 || wy >= r1) continue;
+                    drawBead(view.x + wx * cell, view.y + wy * cell, cell, code, drawCodes);
+                }
+            }
+        }
+        ctx.restore();
+    }
+
     function draw() {
         // 用 backing store 的尺寸而不是容器尺寸：侧栏/次面板做宽度动画时容器尺寸每帧都在变，
         // 这里跟着位图走，画面不会画到画布外面
@@ -285,10 +580,18 @@
         ctx.fillRect(0, 0, W, H);
 
         const cell = view.scale;
-        const ox = view.x;
+        const ox = view.x;          // 世界原点的屏幕位置
         const oy = view.y;
+        // 当前区域左上角的屏幕位置（多区域时 D.x/D.y 不为 0）
+        const rx = ox + D.x * cell;
+        const ry = oy + D.y * cell;
         const boardW = D.cols * cell;
         const boardH = D.rows * cell;
+
+        // 无限背景网格：区域外也铺格子
+        drawWorldGrid(W, H, cell);
+        // 草稿（区域外的散画）：压在网格上面、区域底板下面
+        drawDrafts(cell, W, H);
 
         // 画布投影 + 底板：底板颜色 = 空格底色
         const emptyHex = state.emptyColor || '#ffffff';
@@ -298,25 +601,25 @@
         ctx.shadowBlur = 26;
         ctx.shadowOffsetY = 6;
         ctx.fillStyle = emptyHex;
-        ctx.fillRect(ox, oy, boardW, boardH);
+        ctx.fillRect(rx, ry, boardW, boardH);
         ctx.restore();
 
-        // 可见范围
-        const c0 = Math.max(0, Math.floor(-ox / cell));
-        const c1 = Math.min(D.cols, Math.ceil((W - ox) / cell));
-        const r0 = Math.max(0, Math.floor(-oy / cell));
-        const r1 = Math.min(D.rows, Math.ceil((H - oy) / cell));
+        // 可见范围（世界坐标，且裁到区域内部）
+        const c0 = Math.max(D.x, Math.floor(-ox / cell));
+        const c1 = Math.min(D.x + D.cols, Math.ceil((W - ox) / cell));
+        const r0 = Math.max(D.y, Math.floor(-oy / cell));
+        const r1 = Math.min(D.y + D.rows, Math.ceil((H - oy) / cell));
 
         // 空格底纹：底色很浅时叠一层极淡棋盘格，能区分「空」和「白豆」；深底色就不叠
         if (cell >= 5 && emptyLight) {
             ctx.save();
             ctx.beginPath();
-            ctx.rect(ox, oy, boardW, boardH);
+            ctx.rect(rx, ry, boardW, boardH);
             ctx.clip();
             const t = cell;
             for (let r = r0; r < r1; r++) {
                 for (let c = c0; c < c1; c++) {
-                    if (D.grid[r * D.cols + c]) continue;
+                    if (D.grid[gidx(c, r)]) continue;
                     if ((r + c) % 2 === 0) continue;
                     ctx.fillStyle = 'rgba(20,22,26,.028)';
                     ctx.fillRect(ox + c * cell, oy + r * cell, t, t);
@@ -325,49 +628,16 @@
             ctx.restore();
         }
 
-        // 豆子
+        // 豆子（区域内）
         const drawCodes = cell >= 20;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
         for (let r = r0; r < r1; r++) {
             for (let c = c0; c < c1; c++) {
-                const code = D.grid[r * D.cols + c];
+                const code = D.grid[gidx(c, r)];
                 if (!code) continue;
-                const p = PAL_MAP.get(code);
-                if (!p) continue;
-
-                const x = ox + c * cell;
-                const y = oy + r * cell;
-
-                // 单色提亮：非目标色统一画成淡灰，保留形状但不抢眼
-                if (state.focus && code !== state.focus) {
-                    ctx.fillStyle = '#E7E8EC';
-                    if (cell >= 10) {
-                        ctx.beginPath();
-                        roundRect(ctx, x + 0.5, y + 0.5, cell - 1, cell - 1, Math.min(cell * 0.22, 4));
-                        ctx.fill();
-                    } else {
-                        ctx.fillRect(x, y, cell, cell);
-                    }
-                    continue;
-                }
-
-                ctx.fillStyle = p.hex;
-                if (cell >= 10) {
-                    ctx.beginPath();
-                    const rad = Math.min(cell * 0.22, 4);
-                    roundRect(ctx, x + 0.5, y + 0.5, cell - 1, cell - 1, rad);
-                    ctx.fill();
-                } else {
-                    ctx.fillRect(x, y, cell, cell);
-                }
-
-                if (drawCodes) {
-                    ctx.fillStyle = luminance(p.hex) > 0.62 ? 'rgba(0,0,0,.68)' : 'rgba(255,255,255,.82)';
-                    ctx.font = `600 ${Math.floor(cell * 0.34)}px system-ui, -apple-system, sans-serif`;
-                    ctx.fillText(code, x + cell / 2, y + cell / 2 + 0.5);
-                }
+                drawBead(ox + c * cell, oy + r * cell, cell, code, drawCodes);
             }
         }
 
@@ -378,30 +648,30 @@
             ctx.beginPath();
             for (let c = c0; c <= c1; c++) {
                 const x = Math.round(ox + c * cell) + .5;
-                ctx.moveTo(x, oy);
-                ctx.lineTo(x, oy + boardH);
+                ctx.moveTo(x, ry);
+                ctx.lineTo(x, ry + boardH);
             }
             for (let r = r0; r <= r1; r++) {
                 const y = Math.round(oy + r * cell) + .5;
-                ctx.moveTo(ox, y);
-                ctx.lineTo(ox + boardW, y);
+                ctx.moveTo(rx, y);
+                ctx.lineTo(rx + boardW, y);
             }
             ctx.stroke();
 
-            // 大格子线（每 5 格）
+            // 大格子线（每 5 格），从区域原点算起，不跟着世界坐标漂
             if (cell * 5 >= 30) {
                 ctx.strokeStyle = 'rgba(20,22,26,.26)';
                 ctx.lineWidth = 1.5;
                 ctx.beginPath();
-                for (let c = 0; c <= D.cols; c += 5) {
+                for (let c = D.x; c <= D.x + D.cols; c += 5) {
                     const x = Math.round(ox + c * cell) + .5;
-                    ctx.moveTo(x, oy);
-                    ctx.lineTo(x, oy + boardH);
+                    ctx.moveTo(x, ry);
+                    ctx.lineTo(x, ry + boardH);
                 }
-                for (let r = 0; r <= D.rows; r += 5) {
+                for (let r = D.y; r <= D.y + D.rows; r += 5) {
                     const y = Math.round(oy + r * cell) + .5;
-                    ctx.moveTo(ox, y);
-                    ctx.lineTo(ox + boardW, y);
+                    ctx.moveTo(rx, y);
+                    ctx.lineTo(rx + boardW, y);
                 }
                 ctx.stroke();
             }
@@ -410,31 +680,32 @@
         // 画布边框
         ctx.strokeStyle = 'rgba(20,22,26,.30)';
         ctx.lineWidth = 1;
-        ctx.strokeRect(ox + .5, oy + .5, boardW - 1, boardH - 1);
+        ctx.strokeRect(rx + .5, ry + .5, boardW - 1, boardH - 1);
 
-        // 坐标
+        // 坐标（编号从区域左上角算，1 起）
         if (cell >= 14) {
             ctx.fillStyle = 'rgba(20,22,26,.42)';
             ctx.font = `500 ${clamp(cell * 0.34, 9, 12)}px system-ui, sans-serif`;
             const coordStep = cell >= 26 ? 1 : 5;
 
             ctx.textAlign = 'center';
-            for (let c = 0; c < D.cols; c++) {
-                if (coordStep === 5 && (c + 1) % 5 !== 0) continue;
-                ctx.fillText(String(c + 1), ox + c * cell + cell / 2, oy - 7);
+            for (let c = D.x; c < D.x + D.cols; c++) {
+                if (coordStep === 5 && ((c - D.x) + 1) % 5 !== 0) continue;
+                ctx.fillText(String(c - D.x + 1), ox + c * cell + cell / 2, ry - 7);
             }
             ctx.textAlign = 'right';
-            for (let r = 0; r < D.rows; r++) {
-                if (coordStep === 5 && (r + 1) % 5 !== 0) continue;
-                ctx.fillText(String(r + 1), ox - 8, oy + r * cell + cell / 2);
+            for (let r = D.y; r < D.y + D.rows; r++) {
+                if (coordStep === 5 && ((r - D.y) + 1) % 5 !== 0) continue;
+                ctx.fillText(String(r - D.y + 1), rx - 8, oy + r * cell + cell / 2);
             }
         }
 
         // 选区：遮罩底色 + 逐格外轮廓（套索/涂抹/多边形都能画准）
+        // 遮罩是**区域局部坐标**（跟 D.grid 同尺寸），所以屏幕位置用区域原点 rx/ry
         if (state.select) {
             ctx.save();
             ctx.beginPath();
-            ctx.rect(ox, oy, boardW, boardH);
+            ctx.rect(rx, ry, boardW, boardH);
             ctx.clip();
 
             ctx.fillStyle = 'rgba(108,76,241,.10)';
@@ -442,7 +713,7 @@
             if (sel.simple && !sel.inverse) {
                 // 矩形是最常见的：一个矩形铺底就够，别逐格 4 万次（200×200 的图会卡）
                 const b = sel.sb;
-                ctx.fillRect(ox + b.c0 * cell, oy + b.r0 * cell,
+                ctx.fillRect(rx + b.c0 * cell, ry + b.r0 * cell,
                     (b.c1 - b.c0 + 1) * cell, (b.r1 - b.r0 + 1) * cell);
             } else {
                 // 按行合并连续段：非矩形选区逐格 fillRect 在 200×200 上是 4 万次，
@@ -453,7 +724,7 @@
                         const on = c < D.cols && inSel(c, r);
                         if (on && run < 0) run = c;
                         else if (!on && run >= 0) {
-                            ctx.fillRect(ox + run * cell, oy + r * cell, (c - run) * cell, cell);
+                            ctx.fillRect(rx + run * cell, ry + r * cell, (c - run) * cell, cell);
                             run = -1;
                         }
                     }
@@ -464,8 +735,8 @@
             if (segs && segs.length) {
                 ctx.beginPath();
                 for (let i = 0; i < segs.length; i += 4) {
-                    ctx.moveTo(ox + segs[i] * cell, oy + segs[i + 1] * cell);
-                    ctx.lineTo(ox + segs[i + 2] * cell, oy + segs[i + 3] * cell);
+                    ctx.moveTo(rx + segs[i] * cell, ry + segs[i + 1] * cell);
+                    ctx.lineTo(rx + segs[i + 2] * cell, ry + segs[i + 3] * cell);
                 }
                 ctx.lineCap = 'round';
                 ctx.strokeStyle = 'rgba(255,255,255,.92)';   // 白色垫底：深色豆子上也看得清
@@ -533,20 +804,18 @@
             }
 
             ctx.save();
-            ctx.beginPath();
-            ctx.rect(ox, oy, boardW, boardH);
-            ctx.clip();
             ctx.fillStyle = fill;
             ctx.strokeStyle = stroke;
             ctx.lineWidth = 1.4;
             const inset = Math.min(1.2, cell * 0.12);
             for (const [cc, rr] of cells) {
-                if (!inBounds(cc, rr)) continue;
+                // cells 是**世界坐标**（相对光标）。区域内看选区，区域外是草稿区（不设作用域）
+                const l = localOf(cc, rr);
                 const x = ox + cc * cell;
                 const y = oy + rr * cell;
 
                 // 选区外：不涂色，画个灰叉 —— 一眼看出作用域挡住了这里
-                if (!inSel(cc, rr)) {
+                if (l && !inSel(l.c, l.r)) {
                     if (cell < 7) continue;
                     ctx.save();
                     ctx.strokeStyle = 'rgba(20,22,26,.30)';
@@ -616,6 +885,7 @@
         D.grid = rebuildGrid({ cols: c0, rows: r0, grid: D.grid }, nc, nr, dx, dy);
         D.cols = nc;
         D.rows = nr;
+        syncRegionMeta();
 
         // 选区遮罩跟尺寸绑死（索引全变了），尺寸一动就作废，别留个错位的壳
         state.select = null;
@@ -639,9 +909,12 @@
         const h = D.rows * view.scale;
         const W = vp.clientWidth;
         const H = vp.clientHeight;
+        // 区域左上角（世界原点 + 区域偏移）
+        const x = view.x + D.x * view.scale;
+        const y = view.y + D.y * view.scale;
 
         // 缩得太小：手柄会挤成一团，反而不好抓，藏起来用面板改
-        if (view.scale < 5 || view.x > W || view.y > H || view.x + w < 0 || view.y + h < 0) {
+        if (view.scale < 5 || x > W || y > H || x + w < 0 || y + h < 0) {
             if (!bf.hidden) bf.hidden = true;
             return;
         }
@@ -649,7 +922,7 @@
 
         bf.style.width = w + 'px';
         bf.style.height = h + 'px';
-        bf.style.transform = `translate(${view.x}px, ${view.y}px)`;
+        bf.style.transform = `translate(${x}px, ${y}px)`;
         const badge = $('bfBadge');
         if (badge) badge.textContent = `${D.cols} × ${D.rows}`;
     }
@@ -706,10 +979,13 @@
             cols, rows, dx, dy);
         D.cols = cols;
         D.rows = rows;
+        syncRegionMeta();
         state.select = null;
         state.poly = [];
 
         // 钉住对侧边缘：右/下那条边不许跟着指针跑
+        // TODO(T8)：多区域后这里该改 D.x/D.y 而不是 view.x/view.y，
+        //           否则拖动别处的区域会把整个世界推走
         if (dx) view.x = d.vx0 + (d.cols0 - cols) * d.scale;
         if (dy) view.y = d.vy0 + (d.rows0 - rows) * d.scale;
 
@@ -823,7 +1099,87 @@
         };
     }
 
+    // 是否落在当前区域内（**局部坐标**：0..D.cols / 0..D.rows）
+    // 世界坐标的越界判断用 gidx() >= 0 或 localOf()，别混用。
     const inBounds = (c, r) => c >= 0 && r >= 0 && c < D.cols && r < D.rows;
+
+    /* ---------------------------------------------------------
+     * 草稿区（区域外的格子）
+     *
+     * 无限画布上区域外也能画，但**只有区域内的内容算图纸**、才会进 3D。
+     * 区域外的散画叫草稿：随便画、不占区域、不参与出图。
+     *
+     * 存储不能开大数组（世界是无限的），按 32×32 分块稀疏存：
+     *   drafts: Map<"cx,cy", Map<localIdx, code>>
+     * 空块的 Map 会被删掉，所以没有内容的区域零成本。
+     * --------------------------------------------------------- */
+
+    const DRAFT_CHUNK = 32;
+    const drafts = new Map();
+
+    const draftChunkKey = (cx, cy) => cx + ',' + cy;
+
+    function draftLocal(wx, wy) {
+        const cx = Math.floor(wx / DRAFT_CHUNK);
+        const cy = Math.floor(wy / DRAFT_CHUNK);
+        return {
+            cx, cy,
+            li: (wy - cy * DRAFT_CHUNK) * DRAFT_CHUNK + (wx - cx * DRAFT_CHUNK)
+        };
+    }
+
+    function getDraft(wx, wy) {
+        const { cx, cy, li } = draftLocal(wx, wy);
+        const ch = drafts.get(draftChunkKey(cx, cy));
+        return (ch && ch.get(li)) || '';
+    }
+
+    function setDraft(wx, wy, code) {
+        const { cx, cy, li } = draftLocal(wx, wy);
+        const key = draftChunkKey(cx, cy);
+        let ch = drafts.get(key);
+
+        if (!code) {
+            if (!ch || !ch.has(li)) return false;
+            ch.delete(li);
+            if (!ch.size) drafts.delete(key);   // 块空了就整块扔掉
+            return true;
+        }
+
+        if (!ch) { ch = new Map(); drafts.set(key, ch); }
+        if (ch.get(li) === code) return false;
+        ch.set(li, code);
+        return true;
+    }
+
+    // 草稿总数（统计面板 / 迁移判断用）
+    function draftCount() {
+        let n = 0;
+        for (const ch of drafts.values()) n += ch.size;
+        return n;
+    }
+
+    // 紧凑序列化：扁平数组 [wx, wy, code, ...]，撤销栈和持久化都用它
+    function serializeDrafts() {
+        const out = [];
+        for (const [key, ch] of drafts) {
+            const [cxs, cys] = key.split(',');
+            const cx = Number(cxs), cy = Number(cys);
+            const bx = cx * DRAFT_CHUNK, by = cy * DRAFT_CHUNK;
+            for (const [li, code] of ch) {
+                out.push(bx + (li % DRAFT_CHUNK), by + Math.floor(li / DRAFT_CHUNK), code);
+            }
+        }
+        return out;
+    }
+
+    function loadDrafts(flat) {
+        drafts.clear();
+        if (!flat || !flat.length) return;
+        for (let i = 0; i < flat.length; i += 3) {
+            setDraft(flat[i], flat[i + 1], flat[i + 2]);
+        }
+    }
 
     /* =========================================================
      * 5b. 选区：遮罩模型 + 作用域
@@ -872,12 +1228,16 @@
         return s.inverse ? { c0: 0, r0: 0, c1: D.cols - 1, r1: D.rows - 1 } : s.sb;
     }
 
-    /* 唯一的作用域判定：真 = 这一格允许被编辑 */
+    /* 唯一的作用域判定：真 = 这一格允许被编辑。
+     *
+     * 参数是**区域局部坐标**（0..D.cols / 0..D.rows）：选区遮罩跟 D.grid
+     * 同尺寸，本来就按局部下标排。指针给的是世界坐标，先用 localOf() 换算再传进来。
+     */
     function inSel(c, r) {
         const s = state.select;
         if (!s) return true;
         if (c < 0 || r < 0 || c >= D.cols || r >= D.rows) return false;
-        const v = s.mask[r * D.cols + c] === 1;
+        const v = s.mask[lidx(c, r)] === 1;
         return s.inverse ? !v : v;
     }
 
@@ -889,23 +1249,28 @@
         }
     }
 
+    /* 框选。a / b 是**世界坐标**（指针给的），遮罩是区域局部的，所以先平移再裁边。 */
     function rectMask(a, b) {
         const m = new Uint8Array(D.cols * D.rows);
-        const c0 = Math.max(0, Math.min(a.c, b.c));
-        const c1 = Math.min(D.cols - 1, Math.max(a.c, b.c));
-        const r0 = Math.max(0, Math.min(a.r, b.r));
-        const r1 = Math.min(D.rows - 1, Math.max(a.r, b.r));
+        const la = toLocal(a.c, a.r);
+        const lb = toLocal(b.c, b.r);
+        const c0 = Math.max(0, Math.min(la.c, lb.c));
+        const c1 = Math.min(D.cols - 1, Math.max(la.c, lb.c));
+        const r0 = Math.max(0, Math.min(la.r, lb.r));
+        const r1 = Math.min(D.rows - 1, Math.max(la.r, lb.r));
         for (let r = r0; r <= r1; r++) {
-            for (let c = c0; c <= c1; c++) m[r * D.cols + c] = 1;
+            for (let c = c0; c <= c1; c++) m[lidx(c, r)] = 1;
         }
         return m;
     }
 
-    /* 套索 / 多边形共用：边上的格子全算，再射线法填内部 */
-    function polyMask(pts) {
+    /* 套索 / 多边形共用：边上的格子全算，再射线法填内部
+       pts 是**世界坐标**（指针给的），遮罩是区域局部的，所以先平移。 */
+    function polyMask(worldPts) {
         const m = new Uint8Array(D.cols * D.rows);
-        if (!pts.length) return m;
-        const put = (c, r) => { if (inBounds(c, r)) m[r * D.cols + c] = 1; };
+        if (!worldPts.length) return m;
+        const pts = worldPts.map(p => toLocal(p.c, p.r));
+        const put = (c, r) => { if (inBounds(c, r)) m[lidx(c, r)] = 1; };
         if (pts.length === 1) { put(pts[0].c, pts[0].r); return m; }
 
         for (let i = 1; i < pts.length; i++) lineCells(pts[i - 1], pts[i], put);
@@ -920,19 +1285,21 @@
                         const xj = pts[j].c + .5, yj = pts[j].r + .5;
                         if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) inside = !inside;
                     }
-                    if (inside) m[r * D.cols + c] = 1;
+                    if (inside) m[lidx(c, r)] = 1;
                 }
             }
         }
         return m;
     }
 
-    function stampSmudge(mask, c, r) {
+    /* 涂抹选区。c / r 是**世界坐标**（指针给的），遮罩是区域局部的，所以先平移。 */
+    function stampSmudge(mask, wc, wr) {
         const rad = Math.floor((Math.max(1, state.selSmudge) - 1) / 2);
+        const l = toLocal(wc, wr);
         for (let dy = -rad; dy <= rad; dy++) {
             for (let dx = -rad; dx <= rad; dx++) {
-                const cc = c + dx, rr = r + dy;
-                if (inBounds(cc, rr)) mask[rr * D.cols + cc] = 1;
+                const cc = l.c + dx, rr = l.r + dy;
+                if (inBounds(cc, rr)) mask[lidx(cc, rr)] = 1;
             }
         }
     }
@@ -982,7 +1349,7 @@
         let n = 0, c0 = D.cols, r0 = D.rows, c1 = -1, r1 = -1;
         for (let r = 0; r < D.rows; r++) {
             for (let c = 0; c < D.cols; c++) {
-                if (!mask[r * D.cols + c]) continue;
+                if (!mask[lidx(c, r)]) continue;
                 n++;
                 if (c < c0) c0 = c;
                 if (c > c1) c1 = c;
@@ -1127,7 +1494,10 @@
             label,
             cols: D.cols,
             rows: D.rows,
-            grid: D.grid.slice()
+            grid: D.grid.slice(),
+            // 草稿也要进历史，否则画在区域外的笔画撤不回来。
+            // 用扁平数组而不是 Map 快照：序列化后体积小，而且不会被后续修改带坏。
+            drafts: serializeDrafts()
         });
         if (history.stack.length > MAX_UNDO) history.stack.shift();
         history.index = history.stack.length - 1;
@@ -1142,6 +1512,8 @@
         D.cols = s.cols;
         D.rows = s.rows;
         D.grid = s.grid.slice();
+        loadDrafts(s.drafts);
+        syncRegionMeta();
         history.index = i;
         state.select = null;
         updateDocMeta();
@@ -1171,13 +1543,24 @@
      * 7. 编辑操作
      * ========================================================= */
 
-    function setCell(c, r, code) {
-        if (!inBounds(c, r)) return false;
-        if (!inSel(c, r)) return false;      // 作用域：选区外一律不写
-        const i = r * D.cols + c;
-        if (D.grid[i] === code) return false;
-        D.grid[i] = code;
-        return true;
+    // 第一刀草稿区只开放画笔/橡皮。填充、描边、选区这些落在区域外直接忽略
+    // （不是静默出错，是故意不写——草稿区没有"选区内"的概念，硬写会绕开作用域）
+    const DRAFT_TOOLS = new Set(['brush', 'razor', 'chainRazor']);
+
+    /* 写一格。c / r 是**世界坐标**（指针给的）。
+       落在当前区域内 → 写区域；落在区域外 → 写草稿区。 */
+    function setCell(wc, wr, code) {
+        const l = localOf(wc, wr);
+        if (l) {
+            if (!inSel(l.c, l.r)) return false;      // 作用域：选区外一律不写
+            const i = lidx(l.c, l.r);
+            if (D.grid[i] === code) return false;
+            D.grid[i] = code;
+            return true;
+        }
+        // 区域外 → 草稿区
+        if (!DRAFT_TOOLS.has(state.tool)) return false;
+        return setDraft(wc, wr, code);
     }
 
     /* 笔刷覆盖的格子 —— 落笔与光标预览共用，保证「看到的就是画到的」 */
@@ -1231,20 +1614,22 @@
         return changed;
     }
 
-    function floodFill(c, r) {
-        if (!inBounds(c, r)) return false;
-        if (!inSel(c, r)) { toast('这一格在选区外'); return false; }
-        const target = D.grid[r * D.cols + c];
+    /* 填充。c / r 是**世界坐标**（指针给的），进入区域内部后一律用局部坐标。 */
+    function floodFill(wc, wr) {
+        const start = localOf(wc, wr);
+        if (!start) return false;
+        if (!inSel(start.c, start.r)) { toast('这一格在选区外'); return false; }
+        const target = D.grid[lidx(start.c, start.r)];
         if (target === state.color) return false;
 
-        const stack = [[c, r]];
+        const stack = [[start.c, start.r]];
         const seen = new Uint8Array(D.cols * D.rows);
         let changed = false;
 
         while (stack.length) {
             const [x, y] = stack.pop();
             if (!inBounds(x, y)) continue;
-            const i = y * D.cols + x;
+            const i = lidx(x, y);
             if (seen[i]) continue;
             if (D.grid[i] !== target) continue;
             if (!inSel(x, y)) continue;      // 不越出选区
@@ -1256,20 +1641,22 @@
         return changed;
     }
 
-    function chainErase(c, r) {
-        if (!inBounds(c, r)) return false;
-        if (!inSel(c, r)) { toast('这一格在选区外'); return false; }
-        const target = D.grid[r * D.cols + c];
+    /* 连锁剃刀。c / r 是**世界坐标**（指针给的），进入区域内部后一律用局部坐标。 */
+    function chainErase(wc, wr) {
+        const start = localOf(wc, wr);
+        if (!start) return false;
+        if (!inSel(start.c, start.r)) { toast('这一格在选区外'); return false; }
+        const target = D.grid[lidx(start.c, start.r)];
         if (!target) return false;
 
-        const stack = [[c, r]];
+        const stack = [[start.c, start.r]];
         const seen = new Uint8Array(D.cols * D.rows);
         let changed = false;
 
         while (stack.length) {
             const [x, y] = stack.pop();
             if (!inBounds(x, y)) continue;
-            const i = y * D.cols + x;
+            const i = lidx(x, y);
             if (seen[i]) continue;
             if (D.grid[i] !== target) continue;
             if (!inSel(x, y)) continue;      // 不越出选区
@@ -1287,7 +1674,7 @@
             for (let c = 0; c < D.cols; c++) {
                 const tc = axis === 'h' ? D.cols - 1 - c : c;
                 const tr = axis === 'v' ? D.rows - 1 - r : r;
-                g[tr * D.cols + tc] = D.grid[r * D.cols + c];
+                g[tr * D.cols + tc] = D.grid[lidx(c, r)];
             }
         }
         D.grid = g;
@@ -1556,9 +1943,9 @@
             const y1 = Math.round((r + 1) * cy);
             let c = 0;
             while (c < cols) {
-                const hex = hexOf(D.grid[r * cols + c]);
+                const hex = hexOf(D.grid[lidx(c, r)]);
                 let c2 = c + 1;
-                while (c2 < cols && hexOf(D.grid[r * cols + c2]) === hex) c2++;
+                while (c2 < cols && hexOf(D.grid[lidx(c2, r)]) === hex) c2++;
                 g.fillStyle = hex;
                 const x0 = Math.round(c * cx);
                 const x1 = Math.round(c2 * cx);
@@ -1846,7 +2233,7 @@
                     if (cc < 0 || cc >= D.cols) continue;
                     if (SO.scopeIdx && !inSel(cc, rr)) continue;
 
-                    const i = rr * D.cols + cc;
+                    const i = lidx(cc, rr);
                     if (!D.grid[i]) continue;         // 空格不参与优化
 
                     if (mode === 'erase') {
@@ -1878,9 +2265,9 @@
         cur.style.height = size + 'px';
         cur.style.transform = `translate(${left}px, ${top}px)`;
 
-        const p = PAL_MAP.get(D.grid[cell.r * D.cols + cell.c]);
+        const p = PAL_MAP.get(D.grid[lidx(cell.c, cell.r)]);
         $('soInfo').textContent = p
-            ? `${p.code} · ${cell.c},${cell.r}${SO.erased.has(cell.r * D.cols + cell.c) ? ' · 已排除' : ''}`
+            ? `${p.code} · ${cell.c},${cell.r}${SO.erased.has(lidx(cell.c, cell.r)) ? ' · 已排除' : ''}`
             : `${cell.c},${cell.r} · 空格`;
     }
 
@@ -2094,7 +2481,7 @@
         const g = new Array(nw * nh).fill('');
         for (let r = 0; r < nh; r++) {
             for (let c = 0; c < nw; c++) {
-                g[r * nw + c] = D.grid[(r + r0) * D.cols + (c + c0)];
+                g[r * nw + c] = D.grid[lidx(c + c0, r + r0)];
             }
         }
 
@@ -2174,8 +2561,9 @@
                 break;
 
             case 'picker': {
-                if (inBounds(c, r)) {
-                    const code = D.grid[r * D.cols + c];
+                const l = localOf(c, r);
+                if (l) {
+                    const code = D.grid[lidx(l.c, l.r)];
                     if (code) {
                         state.color = code;
                         state.lastPicked = code;
@@ -2914,7 +3302,7 @@
     function countCode(code, scope) {
         if (!code) return 0;
         let n = 0;
-        forEachIn(scope, (c, r) => { if (D.grid[r * D.cols + c] === code) n++; });
+        forEachIn(scope, (c, r) => { if (D.grid[lidx(c, r)] === code) n++; });
         return n;
     }
 
@@ -3063,7 +3451,7 @@
         let c0 = D.cols, r0 = D.rows, c1 = -1, r1 = -1;
         for (let r = 0; r < D.rows; r++) {
             for (let c = 0; c < D.cols; c++) {
-                if (!D.grid[r * D.cols + c]) continue;
+                if (!D.grid[lidx(c, r)]) continue;
                 if (c < c0) c0 = c;
                 if (c > c1) c1 = c;
                 if (r < r0) r0 = r;
@@ -3079,7 +3467,7 @@
 
         const scoped = opt.scope === 'sel' && !!state.select;
         const inScope = (c, r) => !scoped || inSel(c, r);
-        const has = (c, r) => inBounds(c, r) && filled[r * D.cols + c] === 1;
+        const has = (c, r) => inBounds(c, r) && filled[lidx(c, r)] === 1;
 
         const out = [];
         const rimmed = new Set();
@@ -3090,7 +3478,7 @@
             for (let r = 0; r < D.rows; r++) {
                 for (let c = 0; c < D.cols; c++) {
                     if (!inScope(c, r)) continue;
-                    const i = r * D.cols + c;
+                    const i = lidx(c, r);
                     let edge = false;
 
                     for (let dy = -1; dy <= 1 && !edge; dy++) {
@@ -3138,7 +3526,7 @@
 
         for (let r = 0; r < D.rows; r++) {
             for (let c = 0; c < D.cols; c++) {
-                const i = r * D.cols + c;
+                const i = lidx(c, r);
                 const code = before[i];
                 if (!code) continue;
                 if (!inScope(c, r)) continue;
@@ -3151,7 +3539,7 @@
                         if (!dx && !dy) continue;
                         const nc = c + dx, nr = r + dy;
                         if (!inBounds(nc, nr)) continue;
-                        const v = before[nr * D.cols + nc];
+                        const v = before[lidx(nc, nr)];
                         total++;
                         if (v === code) same++;
                         else if (v) tally.set(v, (tally.get(v) || 0) + 1);
@@ -3180,7 +3568,7 @@
         if (!n) { toast('这个范围内没有该颜色'); return; }
 
         forEachIn(st.scope, (c, r) => {
-            const i = r * D.cols + c;
+            const i = lidx(c, r);
             if (D.grid[i] === st.from) D.grid[i] = state.color;
         });
         snapshot(`颜色转换 ${st.from}→${state.color}`);
@@ -3196,7 +3584,7 @@
         if (!n) { toast('这个范围内没有该颜色'); return; }
 
         forEachIn(st.scope, (c, r) => {
-            const i = r * D.cols + c;
+            const i = lidx(c, r);
             if (D.grid[i] === st.from) D.grid[i] = '';
         });
         if (state.focus === st.from) state.focus = null;
@@ -3266,7 +3654,7 @@
         if (!state.color) { toast('先在下面色卡里点一个描边颜色'); return; }
         const plan = planOutline(cmdState.ol);
         if (!plan.length) { toast('没有可以描边的地方'); return; }
-        plan.forEach(([c, r]) => { D.grid[r * D.cols + c] = state.color; });
+        plan.forEach(([c, r]) => { D.grid[lidx(c, r)] = state.color; });
         snapshot(`描边 ${plan.length} 格`);
         requestRender();
         refreshCmd();
@@ -3294,7 +3682,7 @@
         for (let r = 0; r < D.rows; r++) {
             for (let c = 0; c < D.cols; c++) {
                 if (!inSel(c, r)) continue;
-                const i = r * D.cols + c;
+                const i = lidx(c, r);
                 if (D.grid[i]) { D.grid[i] = ''; n++; }
             }
         }
@@ -3387,7 +3775,7 @@
                 for (let r = 0; r < D.rows; r++) {
                     for (let c = 0; c < D.cols; c++) {
                         if (!inSel(c, r)) continue;
-                        const i = r * D.cols + c;
+                        const i = lidx(c, r);
                         if (D.grid[i] !== state.color) { D.grid[i] = state.color; n++; }
                     }
                 }
@@ -3407,7 +3795,7 @@
                 const g = new Array(nw * nh).fill('');
                 for (let r = 0; r < nh; r++) {
                     for (let c = 0; c < nw; c++) {
-                        g[r * nw + c] = D.grid[(r + r0) * D.cols + (c + c0)];
+                        g[r * nw + c] = D.grid[lidx(c + c0, r + r0)];
                     }
                 }
                 D.cols = nw;
@@ -4020,7 +4408,7 @@
         // ---- 珠子 ----
         for (let r = 0; r < D.rows; r++) {
             for (let col = 0; col < D.cols; col++) {
-                const code = D.grid[r * D.cols + col];
+                const code = D.grid[lidx(col, r)];
                 const x = ox + col * bead;
                 const y = oy + r * bead;
 
@@ -4363,7 +4751,7 @@
         for (let r = 0; r < D.rows; r++) {
             const row = new Array(D.cols);
             for (let c = 0; c < D.cols; c++) {
-                const code = D.grid[r * D.cols + c];
+                const code = D.grid[lidx(c, r)];
                 if (!code) {
                     row[c] = { name: 'transparent', rgb: [255, 255, 255], hex: '#ffffff', isTransparent: true };
                     continue;
@@ -4544,6 +4932,7 @@
     $('docName').addEventListener('change', (e) => {
         D.name = e.target.value.trim() || '未命名图纸';
         e.target.value = D.name;
+        syncRegionMeta();
     });
 
     /* =========================================================
@@ -4606,6 +4995,9 @@
         if (location.search.includes('debug')) {
             window.__ed = { D, state, view, inSel, selSize, selBounds, toCell, rectMask, polyMask,
                 SO, soPaint, snapshot, renderChart, OPT, usedColors, PAL_MAP, IronView,
+                W, gidx, lidx, localOf, toLocal, regionAt, worldBounds, makeRegion, bindRegion, syncRegionMeta,
+                setCellWorld: (wc, wr, code) => setCell(wc, wr, code),
+                draftCount, serializeDrafts, loadDrafts,
                 render: () => requestRender(),
                 redraw: () => { fitView(); requestRender(); } };
         }
