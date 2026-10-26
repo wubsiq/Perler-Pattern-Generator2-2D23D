@@ -29,7 +29,7 @@ if (scriptMatch) {
 }
 
 // 2. 外链大文件：单独 new vm.Script 走一遍
-const EXTERNAL = ['js/editor.js', 'js/ironPreview.js', 'js/colors.js', 'js/colorUtils.js'];
+const EXTERNAL = ['js/editor.js', 'js/worldstore.js', 'js/ironPreview.js', 'js/colors.js', 'js/colorUtils.js'];
 for (const f of EXTERNAL) {
     if (!fs.existsSync(f)) { console.log(f, ': (missing, skip)'); continue; }
     const code = fs.readFileSync(f, 'utf8');

@@ -273,11 +273,225 @@
         PAL_MAP = new Map(PAL.map(p => [p.code, p]));
     }
 
-    function loadDoc() {
-        const params = new URLSearchParams(location.search);
+    /* =========================================================
+     * 1b. 持久化：World ↔ 存储层
+     *
+     * 存的是**整个世界**，不只是当前区域：
+     *   - 全部区域（位置/尺寸/内容/颜色/名字）
+     *   - 草稿区（区域外的散画）
+     *   - 当前区域 id
+     *   - 相机位置与缩放
+     *
+     * 自动保存：任何改动 → 标脏 → 1s 后写一次。
+     * 存不进去也不能崩，存储层自己降级（IndexedDB → localStorage）。
+     * ========================================================= */
 
-        if (params.get('new') || params.get('demo')) {
-            const n = params.get('demo') ? 29 : Number(params.get('cols') || 29);
+    const AUTOSAVE_DELAY = 1000;      // 停手 1 秒才写
+    let saveTimer = null;
+    let savePending = false;
+    let saveEnabled = true;           // 整个自动保存的开关
+    let saveSlot = 'current';         // 存到哪个槽位（current / demo）
+    let restoredFromStore = false;    // 本次是不是从存档恢复的
+
+    /** 把当前世界拍成一份可结构化克隆的普通对象。 */
+    function serializeWorld() {
+        return {
+            v: 1,
+            nextId: W.nextId,
+            curId: D.id,
+            regions: W.regions.map(r => ({
+                id: r.id,
+                x: r.x, y: r.y, w: r.w, h: r.h,
+                cells: r.cells.slice(),
+                color: r.color,
+                name: r.name,
+                createdAt: r.createdAt,
+                local: r.local ? {
+                    pos: (r.local.pos || []).slice(),
+                    rot: (r.local.rot || []).slice(),
+                    flipX: !!r.local.flipX
+                } : null
+            })),
+            drafts: serializeDrafts(),
+            view: { x: view.x, y: view.y, scale: view.scale },
+            palette: D.palette,
+            savedAt: Date.now()
+        };
+    }
+
+    /**
+     * 用一份存档把整个世界恢复回来。
+     * 存档结构不对就返回 false（宁可空白也别画出错乱的东西）。
+     */
+    function restoreWorld(data) {
+        if (!data || !Array.isArray(data.regions) || !data.regions.length) return false;
+
+        const regs = [];
+        for (const r of data.regions) {
+            if (!r || typeof r.x !== 'number' || typeof r.y !== 'number') return false;
+            const w = Math.max(1, r.w | 0);
+            const h = Math.max(1, r.h | 0);
+            let cells = Array.isArray(r.cells) ? r.cells.slice(0, w * h) : [];
+            while (cells.length < w * h) cells.push('');
+            regs.push({
+                id: r.id,
+                x: r.x | 0, y: r.y | 0, w, h,
+                cells,
+                color: r.color || REGION_COLORS[0],
+                name: r.name || '未命名图纸',
+                createdAt: r.createdAt || Date.now(),
+                local: r.local ? {
+                    pos: (r.local.pos || [0, 0, 0]).slice(),
+                    rot: (r.local.rot || [0, 0, 0]).slice(),
+                    flipX: !!r.local.flipX
+                } : { pos: [0, 0, 0], rot: [0, 0, 0], flipX: false }
+            });
+        }
+
+        // id 必须唯一，否则 regionById 会指错
+        const seen = new Set();
+        for (const r of regs) {
+            while (seen.has(r.id)) r.id++;
+            seen.add(r.id);
+        }
+
+        W.regions = regs;
+        W.nextId = Math.max(
+            Number(data.nextId) || 1,
+            regs.reduce((m, r) => Math.max(m, r.id + 1), 1)
+        );
+
+        // 草稿区
+        loadDrafts(Array.isArray(data.drafts) ? data.drafts : []);
+
+        // 调色板（要先建 PAL_MAP，后面的色号校验要用）
+        buildPalette(data.palette || 'mard221');
+        D.palette = data.palette || 'mard221';
+
+        // 色号不在当前色卡里的格子清空，避免画出一堆认不出的颜色
+        for (const r of regs) {
+            for (let i = 0; i < r.cells.length; i++) {
+                const code = r.cells[i];
+                if (code && !PAL_MAP.has(code)) r.cells[i] = '';
+            }
+        }
+
+        // 相机
+        if (data.view && typeof data.view.x === 'number') {
+            view.x = data.view.x;
+            view.y = data.view.y;
+            view.scale = clamp(data.view.scale || view.scale, 3, 80);
+        }
+
+        // 绑定当前区域
+        const cur = regionById(data.curId) || regs[0];
+        if (cur) bindRegion(cur);
+
+        return true;
+    }
+
+    /** 标脏：停手 AUTOSAVE_DELAY 毫秒后写一次。 */
+    function markDirty() {
+        if (!saveEnabled) return;
+        savePending = true;
+        if (saveTimer) clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => {
+            saveTimer = null;
+            flushSave();
+        }, AUTOSAVE_DELAY);
+    }
+
+    /** 撤销一次待写（"打开"不算改动，不该触发保存）。 */
+    function cancelPendingSave() {
+        if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+        savePending = false;
+    }
+
+    /** 立刻写一次（不等 debounce）。 */
+    async function flushSave() {
+        if (!saveEnabled) return;
+        if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+        if (!savePending) return;
+        await saveWorldNow();
+    }
+
+    /**
+     * 无条件写一次存档（不管有没有 pending 标志）。
+     *
+     * "从 create.js 交接过来"这种场景要用：交接是一次性的，
+     * 读走就得立刻落库，不然刷新之后就没了。
+     */
+    async function saveWorldNow() {
+        if (!saveEnabled) return false;
+        if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+        savePending = false;
+        if (!window.WorldStore) return false;
+        try {
+            await window.WorldStore.putWorld(serializeWorld(), saveSlot);
+            return true;
+        } catch (_) {
+            return false;        // 存不进去也不能崩
+        }
+    }
+
+    // 页面藏起来（切标签页 / 关窗口）时抢着存一次
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') flushSave();
+    });
+    window.addEventListener('pagehide', () => { flushSave(); });
+
+    /**
+     * 把当前槽位里的存档挪进"我的图纸"，然后清空槽位。
+     *
+     * 用户点"新建空白"时调用：上次没保存的活儿不该直接消失，
+     * 挪进图纸列表里，用户还能翻出来。
+     */
+    async function archiveCurrentWorld() {
+        if (!window.WorldStore) return;
+        try {
+            const old = await window.WorldStore.getWorld('current');
+            if (!old || !old.regions || !old.regions.length) return;
+
+            // 空世界不值得备份
+            let filled = 0;
+            for (const r of old.regions) {
+                for (const c of (r.cells || [])) if (c) { filled++; break; }
+            }
+            if (!filled) return;
+
+            const rec = {
+                id: 'auto_' + Date.now(),
+                name: '自动备份 ' + new Date().toLocaleString('zh-CN', { hour12: false }),
+                savedAt: Date.now(),
+                auto: true,
+                world: old
+            };
+            await window.WorldStore.putDesign(rec);
+            await window.WorldStore.clearWorld('current');
+        } catch (_) { /* 备份失败也别挡住新建 */ }
+    }
+
+    /**
+     * 载入文档。三级优先级：
+     *   1. ?new / ?demo —— 明确要一张新的，不读任何存档
+     *   2. sessionStorage 的 perlerDoc —— create.js 刚传过来的图纸（一次性交接）
+     *   3. IndexedDB 里的会话 —— 上次没关干净的活儿
+     *   4. 空画布
+     *
+     * 第 2 级读完就删掉：不然用户刷新一次，
+     * 交接过来的旧图纸会把刷新后新画的东西盖回去。
+     */
+    async function loadDoc() {
+        const params = new URLSearchParams(location.search);
+        const wantNew = !!params.get('new');
+        const wantDemo = !!params.get('demo');
+
+        // ?demo 是示例：存到独立槽位，不污染用户自己的活儿
+        saveSlot = wantDemo ? 'demo' : 'current';
+        saveEnabled = !wantDemo;
+
+        if (wantNew || wantDemo) {
+            const n = wantDemo ? 29 : Number(params.get('cols') || 29);
             D.cols = clamp(n, 5, 200);
             D.rows = clamp(Number(params.get('rows') || n), 5, 200);
             D.palette = 'mard221';
@@ -285,16 +499,22 @@
 
             buildPalette(D.palette);
 
-            if (params.get('demo')) {
+            if (wantDemo) {
                 D.name = '示例 · 心';
                 drawDemoHeart();
             } else {
                 D.name = '未命名图纸';
             }
             ensureRegion();
+
+            // ?new 意味着用户要重新开始：把上次没保存的活儿挪进"我的图纸"存一份，
+            // 别直接冲掉——万一用户是点错了，还能找回来
+            if (wantNew) await archiveCurrentWorld();
+
             return;
         }
 
+        // 2. create.js 的交接（sessionStorage）
         const raw = sessionStorage.getItem(SESSION_KEY);
         if (raw) {
             try {
@@ -309,11 +529,33 @@
                 // 补齐色卡里可能缺的色号
                 D.grid = D.grid.map(code => (code && !PAL_MAP.has(code)) ? '' : code);
                 ensureRegion();
+
+                // 消费掉这次交接
+                sessionStorage.removeItem(SESSION_KEY);
+
+                // 立刻把交接内容落进 IndexedDB。
+                // 这一步很关键：交接是一次性的（读走就删），
+                // 但用户刷新后还得看到同一份图纸 —— 靠的就是这份存档。
+                // 同时用户接着画的改动也会更新它，
+                // 不会被那份过期的交接内容盖回去。
+                await saveWorldNow();
+
                 return;
             } catch (_) { }
         }
 
-        // 兜底：空画布
+        // 3. IndexedDB 会话恢复
+        if (window.WorldStore) {
+            try {
+                const saved = await window.WorldStore.getWorld();
+                if (saved && restoreWorld(saved)) {
+                    restoredFromStore = true;
+                    return;
+                }
+            } catch (_) { }
+        }
+
+        // 4. 兜底：空画布
         D.cols = 29;
         D.rows = 29;
         D.grid = new Array(D.cols * D.rows).fill('');
@@ -415,6 +657,20 @@
         refScale = view.scale;      // 适应窗口 = 100%
         updateZoomLabel();
         requestRender();
+    }
+
+    /**
+     * 只重算缩放基准（100% 对应多少），不动相机位置。
+     *
+     * 从存档恢复时用：相机位置是用户上次自己摆的，得留着；
+     * 但窗口尺寸可能变了，"100%" 的含义得按新窗口重算。
+     */
+    function fitViewScaleOnly() {
+        const w = vp.clientWidth;
+        const h = vp.clientHeight;
+        const pad = window.innerWidth <= 760 ? 18 : 56;
+        const s = Math.min((w - pad * 2) / D.cols, (h - pad * 2) / D.rows);
+        refScale = clamp(s, 4, 64);
     }
 
     function zoomAt(factor, sx, sy) {
@@ -1889,6 +2145,7 @@
         updateHistoryButtons();
         updateDocMeta();
         renderStats();
+        markDirty();
     }
 
     function restore(i) {
@@ -1907,6 +2164,7 @@
         syncSizePanel();
         syncSelBar();
         requestRender();
+        markDirty();
     }
 
     function undo() {
@@ -1941,11 +2199,14 @@
             const i = lidx(l.c, l.r);
             if (D.grid[i] === code) return false;
             D.grid[i] = code;
+            markDirty();
             return true;
         }
         // 区域外 → 草稿区
         if (!DRAFT_TOOLS.has(state.tool)) return false;
-        return setDraft(wc, wr, code);
+        const ok = setDraft(wc, wr, code);
+        if (ok) markDirty();
+        return ok;
     }
 
     /* 笔刷覆盖的格子 —— 落笔与光标预览共用，保证「看到的就是画到的」 */
@@ -5347,8 +5608,8 @@
      * 17. 初始化
      * ========================================================= */
 
-    function boot() {
-        loadDoc();
+    async function boot() {
+        await loadDoc();
         buildToolbar();
         buildColorPanel();
 
@@ -5367,7 +5628,13 @@
         syncInspOpenFlag();
 
         resizeCanvas();
-        fitView();
+        // 从存档恢复的话，相机位置也跟着恢复（restoreWorld 里已经写好了 view）
+        // 但窗口尺寸可能变了，得重算缩放基准
+        if (restoredFromStore) {
+            fitViewScaleOnly();
+        } else {
+            fitView();
+        }
         updateZoomLabel();
 
         // 左下角小窗：独立 DOM canvas，自带指针事件
@@ -5375,6 +5642,10 @@
         requestRender();
 
         snapshot('打开');
+
+        // "打开"这一步不算改动：把刚才那次待写撤掉，
+        // 否则一进页面就往存档里写一份，跟用户动没动手没关系
+        cancelPendingSave();
 
         // 侧栏 / 次面板的宽度动画期间，容器每帧都在变尺寸；等它稳定下来再重设
         // backing store，否则每次 canvas.width 赋值都会清空画面，看着像在刷新
@@ -5400,9 +5671,12 @@
                 SO, soPaint, snapshot, renderChart, OPT, usedColors, PAL_MAP, IronView,
                 W, gidx, lidx, localOf, toLocal, regionAt, worldBounds, makeRegion, bindRegion, syncRegionMeta,
                 setCellWorld: (wc, wr, code) => setCell(wc, wr, code),
-                draftCount, serializeDrafts, loadDrafts,
+                draftCount, serializeDrafts, loadDrafts, getDraft,
                 miniMap, miniSetup, drawMinimap, miniComputeBounds, miniJumpTo, miniJumpToWorld,
                 flip, trimBounds, cropToSel,
+                // 持久化
+                serializeWorld, restoreWorld, markDirty, flushSave, saveWorldNow, cancelPendingSave,
+                store: window.WorldStore,
                 render: () => requestRender(),
                 redraw: () => { fitView(); requestRender(); } };
         }
