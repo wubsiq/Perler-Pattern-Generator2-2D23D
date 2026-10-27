@@ -510,6 +510,11 @@
      *   - 绘制层画半透明预览，位置跟随光标格；
      *   - 左键落位（落点防重叠），Esc 取消；
      *   - 中键 / 空格仍可平移，方便先挪视野再放。
+     *
+     * kind 两种：
+     *   'region' 导入 / 旧图纸迁移 —— 落位是「新建一个区域」；
+     *   'stamp'  选区复制 —— 落位是「把这块格子盖进当前区域」，不建区域。
+     * 两者共用预览、跟随光标、防撞色和尺寸标签，只有落位那一下不同。
      */
     let placing = null;
 
@@ -522,11 +527,29 @@
         };
     }
 
-    /** 预览矩形当前是否撞到已有区域（只用于给边框换色提示）。 */
-    function placingCollides() {
+    /**
+     * 预览当前是不是"放了也白放"（只用来把边框换成红色）。
+     *   region：撞到已有区域；
+     *   stamp ：一颗豆都落不进当前区域（整块在区域外）。
+     */
+    function placingBad() {
         if (!placing) return false;
-        const box = { x: placing.x, y: placing.y, w: placing.w, h: placing.h };
-        return W.regions.some(o => regionsOverlap(box, o));
+        const o = { x: placing.x, y: placing.y };
+        if (placing.kind !== 'stamp') {
+            return W.regions.some(r => regionsOverlap({ x: o.x, y: o.y, w: placing.w, h: placing.h }, r));
+        }
+        const cur = regionById(D.id);
+        if (!cur) return true;
+        // 整块都在区域内 → 一定放得下，不用逐格算
+        if (o.x >= cur.x && o.y >= cur.y &&
+            o.x + placing.w <= cur.x + cur.w && o.y + placing.h <= cur.y + cur.h) return false;
+        for (let y = 0; y < placing.h; y++) {
+            for (let x = 0; x < placing.w; x++) {
+                if (!placing.cells[y * placing.w + x]) continue;
+                if (localOf(o.x + x, o.y + y)) return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -550,8 +573,11 @@
         const cv = placing._bmp;
         cv.width = pw; cv.height = ph;
         const g = cv.getContext('2d');
-        g.fillStyle = state.emptyColor || '#ffffff';
-        g.fillRect(0, 0, pw, ph);
+        // 复制块不能铺底色：它是"盖到已有内容上"，铺白底等于把周围的豆擦掉
+        if (placing.kind !== 'stamp') {
+            g.fillStyle = state.emptyColor || '#ffffff';
+            g.fillRect(0, 0, pw, ph);
+        }
 
         const drawCodes = q >= 20;
         for (let y = 0; y < placing.h; y++) {
@@ -565,7 +591,8 @@
         return cv;
     }
 
-    function beginPlacement(w, h, cells, name) {
+    function beginPlacement(w, h, cells, name, opts) {
+        opts = opts || {};
         const cell = view.scale || 22;
         // 先放到视野中心，省得用户一开始就找不到预览跑哪去了
         const vw = vp.clientWidth, vh = vp.clientHeight;
@@ -583,11 +610,14 @@
             h: chh,
             cells: cells2,
             name: name || '导入图纸',
+            kind: opts.kind === 'stamp' ? 'stamp' : 'region',
             x: 0, y: 0
         };
         const o = placingOriginAt(cx, cy);
         placing.x = o.x; placing.y = o.y;
-        toast('移动鼠标选位置 · 左键放下 · Esc 取消');
+        toast(placing.kind === 'stamp'
+            ? '移动鼠标选位置 · 左键放下 · H/V 翻转 · Esc 取消'
+            : '移动鼠标选位置 · 左键放下 · Esc 取消');
         requestRender();
         return placing;
     }
@@ -600,11 +630,36 @@
         return true;
     }
 
-    /** 落位：建区域 + 灌格子 + 防重叠，一条撤销记录。 */
+    /** 落位：region 建区域 / stamp 盖进当前区域。两条路都只留一条撤销记录。 */
     function commitPlacement(c, r) {
         if (!placing) return null;
         const cur = placing;
         const o = placingOriginAt(c, r);
+
+        if (cur.kind === 'stamp') {
+            placing = null;
+            let n = 0, out = 0;
+            for (let y = 0; y < cur.h; y++) {
+                for (let x = 0; x < cur.w; x++) {
+                    const code = cur.cells[y * cur.w + x];
+                    // 空位不盖：复制的是"形状"，不是"一整块含空气的矩形"
+                    if (!code) continue;
+                    const l = localOf(o.x + x, o.y + y);
+                    if (!l) { out++; continue; }
+                    const i = lidx(l.c, l.r);
+                    if (D.grid[i] !== code) { D.grid[i] = code; n++; }
+                }
+            }
+            if (n || out) {
+                if (n) snapshot('复制粘贴');
+                renderStats();
+            }
+            toast(n ? `放了 ${n} 格` + (out ? `，${out} 格在区域外没放` : '')
+                : (out ? '整块落在区域外，先挪进区域里' : '这一块是空的'));
+            requestRender();
+            return null;
+        }
+
         const reg = addRegion(o.x, o.y, cur.w, cur.h, cur.name, cur.cells, '导入图纸');
         reg._cacheDirty = true;
         placing = null;
@@ -613,6 +668,68 @@
         toast(`已放好「${nm}」 ${reg.w}×${reg.h}`);
         requestRender();
         return reg;
+    }
+
+    /* ---------- 选区复制：抠块 / 跟着鼠标 / 翻转 ---------- */
+
+    /** 上一次复制的块，Ctrl+V 还能再放一份（眼镜腿这种要放两条的场景） */
+    let clipboard = null;
+
+    /**
+     * 把选区里的内容抠成一个块。
+     * 只带形状内的豆（选区外的格子留空），所以套索选一个眼镜腿抠出来的还是腿，
+     * 不是外接矩形那一整块。
+     */
+    function selectionBlock() {
+        if (!state.select) return null;
+        const b = selBounds();
+        const w = b.c1 - b.c0 + 1, h = b.r1 - b.r0 + 1;
+        const cells = new Array(w * h).fill('');
+        let filled = 0;
+        for (let r = b.r0; r <= b.r1; r++) {
+            for (let c = b.c0; c <= b.c1; c++) {
+                if (!inSel(c, r)) continue;
+                const code = D.grid[lidx(c, r)];
+                if (!code) continue;
+                cells[(r - b.r0) * w + (c - b.c0)] = code;
+                filled++;
+            }
+        }
+        return filled ? { w, h, cells, filled } : null;
+    }
+
+    function copySelection() {
+        const blk = selectionBlock();
+        if (!blk) { toast(state.select ? '选区里没有豆子' : '先拖一个选区'); return false; }
+        clipboard = blk;
+        beginPlacement(blk.w, blk.h, blk.cells, '选区复制', { kind: 'stamp' });
+        return true;
+    }
+
+    function pasteClipboard() {
+        if (!clipboard) { toast('先复制一块（Ctrl+C）'); return false; }
+        beginPlacement(clipboard.w, clipboard.h, clipboard.cells, '选区复制', { kind: 'stamp' });
+        return true;
+    }
+
+    /** 复制块落位前翻转：轴 'h' 左右 / 'v' 上下，原位镜像，不建新数组也照样重画预览 */
+    function flipStamp(axis) {
+        if (!placing || placing.kind !== 'stamp') return false;
+        const w = placing.w, h = placing.h, src = placing.cells;
+        const out = new Array(w * h).fill('');
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                const nx = axis === 'h' ? w - 1 - x : x;
+                const ny = axis === 'v' ? h - 1 - y : y;
+                out[ny * w + nx] = src[y * w + x];
+            }
+        }
+        placing.cells = out;
+        placing._bmp = null;            // 预览位图缓存作废
+        placing._bmpCell = -1;
+        toast(axis === 'h' ? '已左右翻转' : '已上下翻转');
+        requestRender();
+        return true;
     }
 
     // 区域标签的屏幕矩形（绘制与命中检测共用）。
@@ -1802,8 +1919,10 @@
                 // 量化过的位图直接拉伸到目标尺寸，拖动时光标换格也不用重画
                 ctx.drawImage(bmp, px, py, pw, ph);
             } else {
-                ctx.fillStyle = state.emptyColor || '#ffffff';
-                ctx.fillRect(px, py, pw, ph);
+                if (placing.kind !== 'stamp') {
+                    ctx.fillStyle = state.emptyColor || '#ffffff';
+                    ctx.fillRect(px, py, pw, ph);
+                }
                 for (let yy = 0; yy < placing.h; yy++) {
                     const row = yy * placing.w;
                     for (let xx = 0; xx < placing.w; xx++) {
@@ -1825,7 +1944,7 @@
             }
             ctx.globalAlpha = 1;
 
-            const bad = placingCollides();
+            const bad = placingBad();
             ctx.strokeStyle = bad ? 'rgba(226,58,58,.95)' : 'rgba(108,76,241,.95)';
             ctx.lineWidth = 2;
             ctx.setLineDash([6, 4]);
@@ -1833,7 +1952,9 @@
             ctx.setLineDash([]);
 
             // 尺寸标签压在框的左上外沿，别盖住图纸本身
-            const txt = `${placing.w} × ${placing.h}`;
+            const txt = placing.kind === 'stamp'
+                ? `复制 ${placing.w} × ${placing.h}　H/V 翻转`
+                : `${placing.w} × ${placing.h}`;
             const fs = 12;
             ctx.font = `600 ${fs}px system-ui, -apple-system, sans-serif`;
             const tw = ctx.measureText(txt).width;
@@ -4544,10 +4665,14 @@
             }
             if (e.key === 'ArrowLeft') { e.preventDefault(); nudge3d(0, -step); return; }
             if (e.key === 'ArrowRight') { e.preventDefault(); nudge3d(0, step); return; }
-            if (e.key === 'ArrowUp') { e.preventDefault(); nudge3d(2, -step); return; }
-            if (e.key === 'ArrowDown') { e.preventDefault(); nudge3d(2, step); return; }
-            if (kk === 'q') { e.preventDefault(); rotate3d(1, -Math.PI / 12); return; }
-            if (kk === 'e') { e.preventDefault(); rotate3d(1, Math.PI / 12); return; }
+            // z 朝上：↑↓ 在地面上前后挪，PageUp/PageDown 才是抬高
+            if (e.key === 'ArrowUp') { e.preventDefault(); nudge3d(1, step); return; }
+            if (e.key === 'ArrowDown') { e.preventDefault(); nudge3d(1, -step); return; }
+            if (e.key === 'PageUp') { e.preventDefault(); nudge3d(2, step); return; }
+            if (e.key === 'PageDown') { e.preventDefault(); nudge3d(2, -step); return; }
+            // Q/E 是绕竖轴自转（z 朝上，所以是 rot[2]）
+            if (kk === 'q') { e.preventDefault(); rotate3d(2, -Math.PI / 12); return; }
+            if (kk === 'e') { e.preventDefault(); rotate3d(2, Math.PI / 12); return; }
             if (kk === 'f') { e.preventDefault(); flip3d(); return; }
             if (kk === 'r') { e.preventDefault(); reset3dTransform(); return; }
             if (kk === '2') { e.preventDefault(); setViewMode('2d'); return; }
@@ -4561,6 +4686,13 @@
             return;
         }
 
+        // 复制块挂着的时候：H / V 翻转，别让它们漏下去变成画笔/别的工具
+        if (placing && placing.kind === 'stamp' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            const fk = e.key.toLowerCase();
+            if (fk === 'h') { e.preventDefault(); flipStamp('h'); return; }
+            if (fk === 'v') { e.preventDefault(); flipStamp('v'); return; }
+        }
+
         if (e.code === 'Space' && !state.spaceDown) {
             state.spaceDown = true;
             canvas.classList.add('is-pan-ready');
@@ -4568,6 +4700,13 @@
         }
 
         const k = e.key.toLowerCase();
+
+        // 复制 / 粘贴（PS 的 Ctrl+C / Ctrl+V）：复制走选区 → 内容跟着鼠标 → 左键落位
+        if ((e.ctrlKey || e.metaKey) && (k === 'c' || k === 'v')) {
+            e.preventDefault();
+            k === 'c' ? copySelection() : pasteClipboard();
+            return;
+        }
         if (k === 'z' && (e.ctrlKey || e.metaKey)) {
             e.preventDefault();
             e.shiftKey ? redo() : undo();
@@ -5574,6 +5713,10 @@
         const s = state.select;
 
         switch (b.dataset.sel) {
+            case 'copy': {
+                copySelection();
+                break;
+            }
             case 'fill': {
                 if (!state.color) { toast('先在下面色卡里点一个颜色'); return; }
                 let n = 0;
@@ -6511,12 +6654,24 @@
     function ensure3d() {
         if (view3d.inst) return view3d.inst;
         try {
-            view3d.inst = new Editor3D($('board3d'));
+            view3d.inst = new Editor3D($('board3d'), $('axis3d'));
         } catch (err) {
             return null;
         }
         view3d.inst.onPick = (id) => select3d(id);
         return view3d.inst;
+    }
+
+    /** 区域在 3D 世界里的中心（z 轴向上，所以只有 x/y；高度看 local.pos[2]） */
+    function regionCenter3d(r) {
+        return { x: r.x + r.w / 2, y: r.y + r.h / 2 };
+    }
+
+    /** 区域在 3D 里的世界坐标 = 2D 摆放 + local 偏移。面板显示/编辑的都是这个。 */
+    function worldOf3d(r) {
+        const L = local3dOf(r);
+        const c = regionCenter3d(r);
+        return [c.x + L.pos[0], c.y + L.pos[1], L.pos[2]];
     }
 
     /** 3D 里选中一块板：同步渲染器高亮 + 底部条 + 右侧实例面板 */
@@ -6555,13 +6710,14 @@
             const cellPx = clamp(Math.floor(Editor3D.MAX_TEX / Math.max(r.w, r.h)), 10, 16);
             if (rebake || !r._tex3d) r._tex3d = bakeRegionTexture(r, cellPx);
             const tex = r._tex3d;
+            const c = regionCenter3d(r);
             ed.setInstance(r.id, {
                 w: r.w,
                 h: r.h,
-                // 2D 世界坐标 → 3D 平面坐标。x 走 x，y 走 z，于是 3D 里的排布
-                // 跟 2D 看到的相对位置一致，用户不用重新建立空间感
-                cx: r.x + r.w / 2,
-                cz: r.y + r.h / 2,
+                // 2D 世界坐标 → 3D 世界坐标：x 走 x，y 走 y，z 是离桌面的高度。
+                // 一格 = 一个单位，所以每块板在世界里都有自己唯一的 XY，不再是"全都 0"
+                cx: c.x,
+                cy: c.y,
                 local: local3dOf(r),
                 shape: tex.shape,
                 texW: tex.width,
@@ -6730,9 +6886,10 @@
         const r = view3d.picked != null ? regionById(view3d.picked) : null;
         if (!r) return;
         const L = local3dOf(r);
+        const w = worldOf3d(r);         // 面板显示世界坐标，不是"偏移量"
         const set = (id, v) => { const el = $(id); if (el && el.value !== v) el.value = v; };
         for (let i = 0; i < 3; i++) {
-            set('instPos' + 'XYZ'[i], round1(L.pos[i]));
+            set('instPos' + 'XYZ'[i], round1(w[i]));
             set('instRot' + 'XYZ'[i], Math.round(L.rot[i] * 180 / Math.PI));
         }
         const fx = $('instFlip');
@@ -6749,7 +6906,11 @@
         return Math.round((Number(v) || 0) * 10) / 10;
     }
 
-    /** 数值框 → r.local：改一次就落盘一次 */
+    /**
+     * 数值框 → r.local。
+     * 位置填的是**世界坐标**：转成相对 2D 摆放位置的偏移再存，
+     * 这样 2D 那边怎么挪区域，3D 里显示的数字始终是"它现在在世界的哪儿"。
+     */
     function applyInstField(el) {
         const r = view3d.picked != null ? regionById(view3d.picked) : null;
         if (!r) return;
@@ -6759,8 +6920,12 @@
         const v = Number(el.value);
         if (!isFinite(v)) return;
         const ax = 'XYZ'.indexOf(m[2]);
-        if (m[1] === 'Pos') L.pos[ax] = v;
-        else L.rot[ax] = v * Math.PI / 180;
+        if (m[1] === 'Pos') {
+            const base = regionCenter3d(r);
+            L.pos[ax] = v - (ax === 0 ? base.x : ax === 1 ? base.y : 0);
+        } else {
+            L.rot[ax] = v * Math.PI / 180;
+        }
         sync3dInstances(false);
         markDirty();
     }
@@ -7191,6 +7356,20 @@
                 setViewMode, view3d, ensure3d, sync3dInstances, bakeRegionTexture,
                 nudge3d, rotate3d, flip3d, reset3dTransform,
                 select3d, renderInstPanel, syncInstFields, applyInstField, local3dOf, shadeHex,
+                regionCenter3d, worldOf3d,
+                setAxisView: (a) => view3d.inst && view3d.inst.setAxisView(a),
+                setPerspectiveView: () => view3d.inst && view3d.inst.setPerspectiveView(),
+                gizmoInfo: () => {
+                    const ed = view3d.inst;
+                    if (!ed) return null;
+                    return {
+                        present: !!$('axis3d'),
+                        ortho: !!ed.ortho,
+                        axis: ed.axisView(),
+                        axes: ed._gizmoAxes().map(a => ({ key: a.key, x: a.x, y: a.y })),
+                        hot: ed._gizmoHot || null
+                    };
+                },
                 instInfo: () => ({
                     count: W.regions.length,
                     rows: Array.from(document.querySelectorAll('#instList .inst-row')).map(el => el.dataset.id),
@@ -7207,7 +7386,8 @@
                     w: $('board3d').width, h: $('board3d').height,
                     cam: view3d.inst ? {
                         yaw: view3d.inst.yaw, pitch: view3d.inst.pitch,
-                        dist: view3d.inst.dist, target: view3d.inst.target.slice()
+                        dist: view3d.inst.dist, target: view3d.inst.target.slice(),
+                        ortho: !!view3d.inst.ortho, axis: view3d.inst.axisView()
                     } : null,
                     items: view3d.inst ? Array.from(view3d.inst.items.keys()) : []
                 }),
@@ -7218,10 +7398,14 @@
                 beginPlacement, cancelPlacement, commitPlacement,
                 placingInfo: () => placing ? {
                     w: placing.w, h: placing.h, x: placing.x, y: placing.y,
+                    kind: placing.kind,
                     name: placing.name, cells: placing.cells.length,
-                    filled: placing.cells.filter(Boolean).length
+                    filled: placing.cells.filter(Boolean).length,
+                    cellsArr: placing.cells.slice(0, 1200)   // 调试用：够大，别在测试里被截断误导
                 } : null,
-                placingCollides,
+                placingBad,
+                copySelection, pasteClipboard, flipStamp, selectionBlock,
+                clipboardInfo: () => clipboard ? { w: clipboard.w, h: clipboard.h, filled: clipboard.filled } : null,
                 // 持久化
                 serializeWorld, restoreWorld, markDirty, flushSave, saveWorldNow, cancelPendingSave,
                 store: window.WorldStore,

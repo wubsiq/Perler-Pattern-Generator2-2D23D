@@ -3381,6 +3381,27 @@ body.editor {
 .editor.is-3d #board { display: none; }
 .editor.is-3d #board3d { display: block; }
 
+/* 右上角坐标轴：一块独立的小画布，纯 2D 绘制（不用 GL），
+   既是「现在朝哪儿」的指示灯，也是点击切平视/俯视/透视的按钮 */
+#axis3d {
+    position: absolute;
+    /* 视口是铺到面板底下的（右上角会被面板盖住），所以要按"画布可见区"的右边让位：
+       222px 是面板占了视口的那一条，再加 12px 留白 */
+    right: 234px;
+    top: 12px;
+    width: 96px;
+    height: 96px;
+    display: none;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, .84);
+    box-shadow: 0 4px 14px rgba(16, 24, 40, .10), 0 0 0 1px rgba(16, 24, 40, .06);
+    backdrop-filter: blur(6px);
+    touch-action: none;
+    z-index: 19;
+}
+
+.editor.is-3d #axis3d { display: block; }
+
 /* 3D 模式下 2D 专有的浮层要收起来，否则会飘在半空 */
 .editor.is-3d .ed-minimap,
 .editor.is-3d .ed-board-frame,
@@ -3754,5 +3775,18 @@ body.editor {
     }
 
     .inst-list { max-height: 38%; }
-    .editor.is-3d .ed-3d-pick { bottom: auto; top: 10px; }
+    /* 贴左上：右上角被坐标轴占着，居中会压上去 */
+    .editor.is-3d .ed-3d-pick {
+        top: 8px;
+        bottom: auto;
+        left: 8px;
+        right: auto;
+        transform: none;
+        max-width: 58%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    /* 窄屏坐标轴缩一点；底部抽屉不占右侧，所以贴右下角即可 */
+    #axis3d { width: 74px; height: 74px; right: 8px; top: 8px; }
 }

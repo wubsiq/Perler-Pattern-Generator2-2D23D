@@ -10,13 +10,14 @@
  * 数据流（单向）：
  *   region.cells(色号字符串[]) ──bakeRegionTexture（在 editor.js 里，能用 PAL_MAP）──▶ canvas + shape
  *   canvas+shape ──setInstance──▶ GL 纹理 + 按「有豆的格子」生成的几何
- *   每帧：model = T(世界位置) · T(local.pos) · Ry · Rx · Rz · S(flipX)
+ *   每帧：model = T(世界位置) · Rz · Ry · Rx · S(flipX)     （Blender 的 XYZ Euler）
  *
- * 三条关键约定：
+ * 四条关键约定：
  *
- *   1) 一格 = 1 世界单位。板厚固定 THICK。
- *      2D 的 (x, y) 直接映射成 3D 的 (x, z)，所以 3D 里各板的相对位置跟 2D 一致 ——
- *      用户扫一眼就知道哪块是哪块，不用重新学一套空间关系。local.pos 叠在这之上。
+ *   1) 一格 = 1 世界单位，**z 轴朝上**（跟 Blender 一套）。
+ *      2D 的 (x, y) 直接是 3D 的 (x, y)，z 是离桌面的高度。
+ *      于是每个实例都有自己唯一的 XYZ —— 面板上不再是一片 0。
+ *      local.pos 是叠在「2D 摆放位置」之上的偏移；面板显示的是两者相加的世界坐标。
  *
  *   2) 形状来自格子掩码，不是外接矩形。
  *      只有 mask=1 的格子才生成顶面/侧壁/底面，空格子什么都不生成。
@@ -28,7 +29,10 @@
  *      滚轮按 delta 指数缩放。早期版本旋转 0.008 rad/px、平移按 dist 的
  *      千分之一硬套，两者都严重超速，用户反馈「太滑了」。
  *
- * 坐标轴：y 朝上；-z 朝屏幕里（默认机位在 +z）。网格第 0 行在 z 最负侧。
+ *   4) 机位在 -y 一侧看向 +y（也就是"从图纸下边缘往里看"），
+ *      配合"网格第 0 行摆在 +y"，俯视图里图纸方向跟 2D 完全一致
+ *      （x 向右、第 0 行在上）。换别的轴组合就会左右镜像或上下翻，
+ *      看着像 bug —— 这三个方向是唯一不镜像的组合。
  */
 (function () {
     'use strict';
@@ -37,6 +41,7 @@
     var MAX_TEX = 2048;         // 单边纹理上限，超了就降烘焙分辨率
     var FLOATS = 12;            // pos(3) normal(3) uv(2) color(3) texFlag(1)
     var STRIDE = FLOATS * 4;    // 字节步长
+    var HALF_PI = Math.PI / 2;
 
     /* ============================ 矩阵（列主序） ============================ */
 
@@ -100,6 +105,18 @@
         m[10] = (far + near) * nf;
         m[11] = -1;
         m[14] = 2 * far * near * nf;
+        return m;
+    }
+
+    /** 正交投影：切"平视/俯视"这类轴向视图时用，边才真正平行、看着才像平面图 */
+    function mOrtho(l, r, b, t, n, f) {
+        var m = identity();
+        m[0] = 2 / (r - l);
+        m[5] = 2 / (t - b);
+        m[10] = -2 / (f - n);
+        m[12] = -(r + l) / (r - l);
+        m[13] = -(t + b) / (t - b);
+        m[14] = -(f + n) / (f - n);
         return m;
     }
 
@@ -171,6 +188,21 @@
         ];
     }
 
+    function dot3(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+
+    function cross3(a, b) {
+        return [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0]
+        ];
+    }
+
+    function norm3(a) {
+        var l = Math.hypot(a[0], a[1], a[2]) || 1;
+        return [a[0] / l, a[1] / l, a[2] / l];
+    }
+
     /* ============================== 着色器 ============================== */
 
     // 顶点自带颜色 + 是否采样贴图，于是「顶面贴图 / 侧面纯色 / 底面暗色」
@@ -218,7 +250,7 @@
         '  float ft = vTex * uHasTex;',
         '  vec3 base = mix(uColor * vCol, texture2D(uTex, vUV).rgb, ft);',
         // 主光从左上前方来
-        '  vec3 L = normalize(vec3(-0.45, 0.86, 0.55));',
+        '  vec3 L = normalize(vec3(-0.45, 0.55, 0.86));',
         '  float diff = max(dot(normalize(vN), L), 0.0);',
         // 顶面贴的是图纸本身：颜色必须跟 2D 看到的完全一致，所以几乎不打光
         // （早期版本让它跟侧面一起吃光照，白底被压成灰底、豆子全暗一档，
@@ -290,15 +322,16 @@
     }
 
     /**
-     * 一块板的几何 —— 只沿着 mask=1 的格子生成。
+     * 一块板的几何 —— 只沿着 mask=1 的格子生成。**z 朝上**。
      *
-     * 本地空间：x∈[-w/2,w/2]，y∈[0,THICK]，z∈[-h/2,h/2]；原点在板中心的地面。
-     * 网格第 0 行落在 z 最负的一侧（跟贴图 v=1 对应，别弄反：翻了就是上下镜像）。
+     * 本地空间：x∈[-w/2,w/2]，y∈[-h/2,h/2]，z∈[0,THICK]；原点在板中心的地面。
+     * 网格第 0 行摆在 +y 一侧（配合机位在 -y：俯视时第 0 行正好在屏幕上方）。
+     * 贴图 v=1 对应第 0 行，所以 v = (ly + h/2) / h。
      *
      * @param {number} w,h 区域格数
      * @param {{mask:Uint8Array, colors:Uint32Array}} shape
      * @param {number} texW,texH 贴图像素尺寸（用来把 UV 内缩半个纹素，避免边缘渗出底色）
-     * @returns {{data:Float32Array, count:number}}
+     * @returns {{data:Float32Array, count:number, lines:Float32Array, lineCount:number}}
      */
     function buildBoard(w, h, shape, texW, texH) {
         var hw = w / 2, hh = h / 2, t = THICK;
@@ -332,44 +365,46 @@
 
         // ---- 轮廓线（选中时贴形描一圈）----
         // 只沿「有豆 ↔ 空格」的交界画，于是框住的是图形本身，不是区域外接矩形。
-        // 以前用外接矩形套框：不规则的图形套一个 29×29 的大方框，看着像画错了。
         var lv = [];
-        function edge(x1, z1, x2, z2) {
-            lv.push(x1, t + 0.03, z1, 0, 1, 0, 0, 0, 1, 1, 1, 0);
-            lv.push(x2, t + 0.03, z2, 0, 1, 0, 0, 0, 1, 1, 1, 0);
+        function edge(x1, y1, x2, y2) {
+            lv.push(x1, y1, t + 0.03, 0, 0, 1, 0, 0, 1, 1, 1, 0);
+            lv.push(x2, y2, t + 0.03, 0, 0, 1, 0, 0, 1, 1, 1, 0);
         }
 
         var filled = function (x, y) {
             return x >= 0 && x < w && y >= 0 && y < h && mask[y * w + x] === 1;
         };
 
-        var UP = [0, 1, 0], DOWN = [0, -1, 0];
+        var UP = [0, 0, 1], DOWN = [0, 0, -1];
         var WHITE = [1, 1, 1];
+
+        // 第 0 行在 +y：ly 从 (hh - y - 1) 到 (hh - y)
+        function rowY(y) { return hh - y - 1; }
 
         // ---- 顶面（贴图）：行内合并成段 ----
         hRuns(w, h, filled, null, false).forEach(function (r) {
             var y = r.y;
             var lx0 = r.x0 - hw, lx1 = r.x1 - hw;
-            var lz0 = y - hh, lz1 = y + 1 - hh;     // 第 0 行在最负的 z 侧
+            var ly0 = rowY(y), ly1 = rowY(y) + 1;
             var u0 = r.x0 / w + iu, u1 = r.x1 / w - iu;
-            var vA = (h - y) / h - iv;              // z=lz0 那一侧（v 大）
-            var vB = (h - y - 1) / h + iv;          // z=lz1 那一侧
+            var vB = (ly0 + hh) / h + iv;       // v 小的一侧（第 y+1 行）
+            var vA = (ly1 + hh) / h - iv;       // v 大的一侧（第 y 行）
             quad(
-                [[lx0, t, lz0], [lx0, t, lz1], [lx1, t, lz1], [lx1, t, lz0]],
+                [[lx0, ly0, t], [lx0, ly1, t], [lx1, ly1, t], [lx1, ly0, t]],
                 UP,
-                [[u0, vA], [u0, vB], [u1, vB], [u1, vA]],
+                [[u0, vB], [u0, vA], [u1, vA], [u1, vB]],
                 WHITE, 1
             );
         });
 
-        // ---- 底面（纯色，压暗）：只在能透过去的时候才看得见，但没有它翻到下面就是空的 ----
+        // ---- 底面（纯色，压暗）：翻到下面看时不至于空着 ----
         hRuns(w, h, filled, colors, true).forEach(function (r) {
             var y = r.y;
             var lx0 = r.x0 - hw, lx1 = r.x1 - hw;
-            var lz0 = y - hh, lz1 = y + 1 - hh;
+            var ly0 = rowY(y), ly1 = rowY(y) + 1;
             var c = rgbOf(colors[y * w + r.x0]).map(function (q) { return q * 0.55; });
             quad(
-                [[lx0, 0, lz0], [lx0, 0, lz1], [lx1, 0, lz1], [lx1, 0, lz0]],
+                [[lx0, ly0, 0], [lx0, ly1, 0], [lx1, ly1, 0], [lx1, ly0, 0]],
                 DOWN,
                 [[0, 0], [0, 0], [0, 0], [0, 0]],
                 c, 0
@@ -378,25 +413,25 @@
 
         // ---- 四条侧壁：只在「这一格的邻格是空的」那一面生成 ----
         var SIDE = 0.80;
-        var NZ = [0, 0, -1], PZ = [0, 0, 1], NX = [-1, 0, 0], PX = [1, 0, 0];
+        var NY = [0, -1, 0], PY = [0, 1, 0], NX = [-1, 0, 0], PX = [1, 0, 0];
 
-        // 前侧（z 最小那一面）
-        hRuns(w, h, function (x, y) { return filled(x, y) && !filled(x, y - 1); }, colors, true)
-            .forEach(function (r) {
-                var y = r.y;
-                var lx0 = r.x0 - hw, lx1 = r.x1 - hw, lz = y - hh;
-                var c = rgbOf(colors[y * w + r.x0]).map(function (q) { return q * SIDE; });
-                quad([[lx0, 0, lz], [lx1, 0, lz], [lx1, t, lz], [lx0, t, lz]], NZ,
-                    [[0, 0], [0, 0], [0, 0], [0, 0]], c, 0);
-            });
-
-        // 后侧（z 最大那一面）
+        // 前侧（y 最小那一面，靠观众）
         hRuns(w, h, function (x, y) { return filled(x, y) && !filled(x, y + 1); }, colors, true)
             .forEach(function (r) {
                 var y = r.y;
-                var lx0 = r.x0 - hw, lx1 = r.x1 - hw, lz = y + 1 - hh;
+                var lx0 = r.x0 - hw, lx1 = r.x1 - hw, ly = rowY(y);
                 var c = rgbOf(colors[y * w + r.x0]).map(function (q) { return q * SIDE; });
-                quad([[lx0, 0, lz], [lx1, 0, lz], [lx1, t, lz], [lx0, t, lz]], PZ,
+                quad([[lx0, ly, 0], [lx1, ly, 0], [lx1, ly, t], [lx0, ly, t]], NY,
+                    [[0, 0], [0, 0], [0, 0], [0, 0]], c, 0);
+            });
+
+        // 后侧（y 最大那一面，远）
+        hRuns(w, h, function (x, y) { return filled(x, y) && !filled(x, y - 1); }, colors, true)
+            .forEach(function (r) {
+                var y = r.y;
+                var lx0 = r.x0 - hw, lx1 = r.x1 - hw, ly = rowY(y) + 1;
+                var c = rgbOf(colors[y * w + r.x0]).map(function (q) { return q * SIDE; });
+                quad([[lx0, ly, 0], [lx1, ly, 0], [lx1, ly, t], [lx0, ly, t]], PY,
                     [[0, 0], [0, 0], [0, 0], [0, 0]], c, 0);
             });
 
@@ -404,9 +439,9 @@
         vRuns(w, h, function (x, y) { return filled(x, y) && !filled(x - 1, y); }, colors, true)
             .forEach(function (r) {
                 var x = r.x, lx = x - hw;
-                var lz0 = r.y0 - hh, lz1 = r.y1 - hh;
+                var ly0 = rowY(r.y1 - 1), ly1 = rowY(r.y0) + 1;
                 var c = rgbOf(colors[r.y0 * w + x]).map(function (q) { return q * SIDE; });
-                quad([[lx, 0, lz0], [lx, 0, lz1], [lx, t, lz1], [lx, t, lz0]], NX,
+                quad([[lx, ly0, 0], [lx, ly1, 0], [lx, ly1, t], [lx, ly0, t]], NX,
                     [[0, 0], [0, 0], [0, 0], [0, 0]], c, 0);
             });
 
@@ -414,9 +449,9 @@
         vRuns(w, h, function (x, y) { return filled(x, y) && !filled(x + 1, y); }, colors, true)
             .forEach(function (r) {
                 var x = r.x, lx = x + 1 - hw;
-                var lz0 = r.y0 - hh, lz1 = r.y1 - hh;
+                var ly0 = rowY(r.y1 - 1), ly1 = rowY(r.y0) + 1;
                 var c = rgbOf(colors[r.y0 * w + x]).map(function (q) { return q * SIDE; });
-                quad([[lx, 0, lz0], [lx, 0, lz1], [lx, t, lz1], [lx, t, lz0]], PX,
+                quad([[lx, ly0, 0], [lx, ly1, 0], [lx, ly1, t], [lx, ly0, t]], PX,
                     [[0, 0], [0, 0], [0, 0], [0, 0]], c, 0);
             });
 
@@ -424,11 +459,11 @@
         for (var yy = 0; yy < h; yy++) {
             for (var xx = 0; xx < w; xx++) {
                 if (mask[yy * w + xx] !== 1) continue;
-                var ex = xx - hw, ez = yy - hh;
-                if (!filled(xx, yy - 1)) edge(ex, ez, ex + 1, ez);
-                if (!filled(xx, yy + 1)) edge(ex, ez + 1, ex + 1, ez + 1);
-                if (!filled(xx - 1, yy)) edge(ex, ez, ex, ez + 1);
-                if (!filled(xx + 1, yy)) edge(ex + 1, ez, ex + 1, ez + 1);
+                var ex = xx - hw, ey = rowY(yy);
+                if (!filled(xx, yy + 1)) edge(ex, ey, ex + 1, ey);
+                if (!filled(xx, yy - 1)) edge(ex, ey + 1, ex + 1, ey + 1);
+                if (!filled(xx - 1, yy)) edge(ex, ey, ex, ey + 1);
+                if (!filled(xx + 1, yy)) edge(ex + 1, ey, ex + 1, ey + 1);
             }
         }
 
@@ -454,14 +489,14 @@
         var v = [];
         E.forEach(function (e) {
             [c[e[0]], c[e[1]]].forEach(function (p) {
-                v.push(p[0], p[1], p[2], 0, 1, 0, 0, 0, 1, 1, 1, 0);
+                v.push(p[0], p[1], p[2], 0, 0, 1, 0, 0, 1, 1, 1, 0);
             });
         });
         return v;
     }
 
     /* ============================== 主体 ============================== */
-    function Editor3D(canvas) {
+    function Editor3D(canvas, gizmo) {
         // preserveDrawingBuffer 必须开：这个视图是按需渲染（静止时不出帧），
         // 关掉的话浏览器合成完就把缓冲丢了，任何像素级回读（readPixel / 导出 / 测试）
         // 都会读到一片 0，而且不报错。
@@ -471,6 +506,7 @@
 
         this.canvas = canvas;
         this.gl = gl;
+        this.gizmo = gizmo || null;      // 右上角坐标轴小画布（可点）
 
         var p = gl.createProgram();
         gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, VS));
@@ -502,16 +538,17 @@
         gl.bindBuffer(gl.ARRAY_BUFFER, this.boxBuf);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(buildUnitBoxLines()), gl.STATIC_DRAW);
 
-        this.items = new Map();     // id -> { id, w, h, buf, tex, hasTex, local, cx, cz, shape, ... }
+        this.items = new Map();     // id -> { id, w, h, buf, tex, hasTex, local, cx, cy, shape, ... }
         this.hoverId = null;
         this.selectedId = null;
 
-        // 相机：绕 target 的球面机位。默认斜上方俯视，能同时看见顶面和一点厚度
+        // 相机：绕 target 的球面机位，z 朝上。默认斜上方俯视，能同时看见顶面和一点厚度
         this.yaw = -0.42;
         this.pitch = 0.62;
         this.dist = 120;
         this.target = [0, 0, 0];
         this.fov = 34 * Math.PI / 180;
+        this.ortho = false;         // 轴向视图（平视/俯视）切正交，边才是真的平行
 
         // 旋转灵敏度：整屏高度拖过去大约转 155°。
         // 以前是固定 0.008 rad/px（同样一屏转 400°+），这就是「太滑」的主因。
@@ -521,8 +558,10 @@
         this._last = 0;
         this._dirty = true;
         this.onPick = null;
+        this.onCamera = null;       // 相机变了通知外面（坐标轴要重画）
 
         this._bindEvents();
+        this._bindGizmo();
         this.resize();
     }
 
@@ -533,9 +572,9 @@
         /**
          * 增/改一块板。
          * @param {number} id
-         * @param {{w:number,h:number,cx:number,cz:number,local:object,
+         * @param {{w:number,h:number,cx:number,cy:number,local:object,
          *          shape:{mask:Uint8Array,colors:Uint32Array,hash:number,filled:number},
-         *          texW:number,texH:number}} info
+         *          texW:number,texH:number}} info  cx/cy = 世界坐标里的板中心（含 2D 摆放）
          * @param {HTMLCanvasElement} [texture] 传同一个 canvas 对象时不会重复上传
          */
         setInstance(id, info, texture) {
@@ -565,7 +604,7 @@
             }
 
             it.cx = info.cx;
-            it.cz = info.cz;
+            it.cy = info.cy;
             it.shape = info.shape || null;
             it.local = info.local || { pos: [0, 0, 0], rot: [0, 0, 0], flipX: false };
 
@@ -655,18 +694,18 @@
                 this._dirty = true;
                 return;
             }
-            var x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+            var x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
             items.forEach(it => {
                 var p = it.local && it.local.pos ? it.local.pos : [0, 0, 0];
-                var cx = it.cx + p[0], cz = it.cz + p[2];
+                var cx = it.cx + p[0], cy = it.cy + p[1];
                 // 用长边的一半（不用对角线）：对角线会把包围盒撑大 40%，
                 // 多块板一起 frame 时整组会缩得比实际小一圈，画面四周全是空的
                 var r = Math.max(it.w, it.h) / 2 * 1.08;   // 1.08 给旋转留点余量
                 x0 = Math.min(x0, cx - r); x1 = Math.max(x1, cx + r);
-                z0 = Math.min(z0, cz - r); z1 = Math.max(z1, cz + r);
+                y0 = Math.min(y0, cy - r); y1 = Math.max(y1, cy + r);
             });
-            this.target = [(x0 + x1) / 2, 0, (z0 + z1) / 2];
-            var span = Math.max(x1 - x0, z1 - z0, 12);
+            this.target = [(x0 + x1) / 2, (y0 + y1) / 2, 0];
+            var span = Math.max(x1 - x0, y1 - y0, 12);
             // 竖屏时水平视野更窄，按宽高比放大距离
             var aspect = Math.max(0.45, (this.canvas.width || 1) / (this.canvas.height || 1));
             var fitH = span / (2 * Math.tan(this.fov / 2));
@@ -680,7 +719,7 @@
             var it = this.items.get(id);
             if (!it) return;
             var p = it.local && it.local.pos ? it.local.pos : [0, 0, 0];
-            this.target = [it.cx + p[0], 0, it.cz + p[2]];
+            this.target = [it.cx + p[0], it.cy + p[1], p[2]];
             var span = Math.max(it.w, it.h, 8);
             this.dist = span / (2 * Math.tan(this.fov / 2)) * 1.55 + 6;
             this._dirty = true;
@@ -690,7 +729,63 @@
         resetCamera() {
             this.yaw = -0.42;
             this.pitch = 0.62;
+            this.ortho = false;
             this.frameAll();
+        },
+
+        /** 轴向视图：正的 X / 正面（-Y）/ 俯视（+Z）。这三个方向都不会把图纸镜像翻转。 */
+        setAxisView(axis) {
+            if (axis === 'x') { this.yaw = HALF_PI; this.pitch = 0; }
+            else if (axis === 'y') { this.yaw = 0; this.pitch = 0; }
+            else { this.yaw = 0; this.pitch = HALF_PI; }
+            this.ortho = true;      // 平视 = 正交，边才是真的平行，像一张平面图
+            this._dirty = true;
+            this.render();
+        },
+
+        /** 回到透视斜视（Blender 里点小方块回到透视视角） */
+        setPerspectiveView() {
+            this.yaw = -0.42;
+            this.pitch = 0.62;
+            this.ortho = false;
+            this._dirty = true;
+            this.render();
+        },
+
+        axisView() {
+            if (!this.ortho) return null;
+            if (Math.abs(this.pitch - HALF_PI) < 1e-3) return 'z';
+            if (Math.abs(this.pitch) < 1e-3) return Math.abs(this.yaw) < 1e-3 ? 'y' : 'x';
+            return null;
+        },
+
+        _up() {
+            // 俯视时 (0,0,1) 跟视线平行，mLookAt 会退化成 0 长度 → 换 +y 当屏幕上方
+            return Math.abs(this.pitch) > 1.5 ? [0, 1, 0] : [0, 0, 1];
+        },
+
+        /** 相机基向量：视线/右/上。拾取、坐标轴、平移都用这一套，别各推各的。 */
+        _basis() {
+            var cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
+            var eye = [
+                this.target[0] + this.dist * cp * Math.sin(this.yaw),
+                this.target[1] - this.dist * cp * Math.cos(this.yaw),
+                this.target[2] + this.dist * sp
+            ];
+            var f = norm3([-Math.sin(this.yaw) * cp, Math.cos(this.yaw) * cp, -sp]);
+            var up = this._up();
+            var r = norm3(cross3(f, up));
+            var u = cross3(r, f);
+            return { eye: eye, f: f, r: r, u: u, up: up };
+        },
+
+        _proj(aspect) {
+            if (this.ortho) {
+                var hh = this.dist * Math.tan(this.fov / 2);
+                var hw = hh * aspect;
+                return mOrtho(-hw, hw, -hh, hh, -4000, 8000);
+            }
+            return mPerspective(this.fov, aspect, 0.5, 6000);
         },
 
         /* ---------------- 事件 ---------------- */
@@ -736,17 +831,15 @@
                 moved += Math.abs(dx) + Math.abs(dy);
 
                 if (mode === 'orbit') {
-                    // 拖拽量按视口高度归一：小窗口不再"一动就飞"
+                    // 拖拽量按视口高度归一：小窗口不再"一动就飞"。
+                    // 一旦开始拖，轴向视图自动退回自由视角（正交保留，别再切线）
                     var k = self._rotPerPx();
                     self.yaw += dx * k;
-                    // 只允许从上方看（0.22 ~ 1.45 弧度）。
-                    // 场景就是一堆水平放的板，允许拖到 0 或负数的话，
-                    // 板会变成一条看不见的窄边 —— 用户会以为东西没了。
-                    self.pitch = Math.max(0.22, Math.min(1.45, self.pitch + dy * k));
+                    self.pitch = Math.max(0.02, Math.min(1.52, self.pitch + dy * k));
+                    self._dirty = true;
                 } else {
                     self._panBy(dx, dy);
                 }
-                self._dirty = true;
             });
 
             var end = function (e) {
@@ -769,7 +862,7 @@
             c.addEventListener('wheel', e => {
                 e.preventDefault();
                 // 按 delta 指数缩放，并限幅：老版本一档 1.12 倍，
-                // 一格滚轮就跳过半个场景，也是"滑"的一部分
+                // 一格滚轮就跳到半个场景之外，也是"滑"的一部分
                 var d = e.deltaY * (e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? 100 : 1));
                 var k = Math.pow(1.0016, -d);
                 k = Math.max(0.75, Math.min(1.34, k));
@@ -780,88 +873,117 @@
             c.addEventListener('dblclick', () => self.resetCamera());
         },
 
-        /** 1:1 跟手平移：屏幕移多少像素，铺在目标平面上的内容就跟着移多少像素 */
-        _panBy(dx, dy) {
-            // 只平移 xz 平面（像拖动一张桌子），不改 target 高度：
-            // 允许上下平移的话，用户很容易把场景推出画面还找不回来
-            var k = this._worldPerPx();
-            var cy = Math.cos(this.yaw), sy = Math.sin(this.yaw);
-            // right = (cy, 0, -sy)：屏幕向右的世界方向
-            // fwd   = (-sy, 0, -cy)：屏幕上方向在水平面的投影
-            this.target[0] -= (dx * cy + dy * -sy) * k;
-            this.target[2] -= (dx * -sy + dy * -cy) * k;
-            this._dirty = true;
+        /** 右上角坐标轴：点轴切平视/俯视，点中心回透视 */
+        _bindGizmo() {
+            var g = this.gizmo;
+            if (!g) return;
+            var self = this;
+            g.style.touchAction = 'none';
+            g.addEventListener('pointerdown', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                const box = g.getBoundingClientRect();
+                const mx = e.clientX - box.left, my = e.clientY - box.top;
+                const hit = self._gizmoHit(mx, my);
+                if (hit === 'center') { self.setPerspectiveView(); return; }
+                if (hit) self.setAxisView(hit);
+            });
+            g.addEventListener('pointermove', e => {
+                const box = g.getBoundingClientRect();
+                const hit = self._gizmoHit(e.clientX - box.left, e.clientY - box.top);
+                g.style.cursor = hit ? 'pointer' : 'default';
+                if (hit !== self._gizmoHot) {
+                    self._gizmoHot = hit;
+                    self._paintGizmo();
+                }
+            });
+            g.addEventListener('pointerleave', () => {
+                if (self._gizmoHot) { self._gizmoHot = null; self._paintGizmo(); }
+            });
         },
 
-        _eye() {
-            var cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
+        /** 坐标轴命中：返回 'x'|'y'|'z'|'center'|null */
+        _gizmoHit(mx, my) {
+            const g = this.gizmo;
+            if (!g) return null;
+            const w = g.clientWidth || 96, h = g.clientHeight || 96;
+            const cx = w / 2, cy = h / 2;
+            if (Math.hypot(mx - cx, my - cy) <= 12) return 'center';
+            const ax = this._gizmoAxes();
+            for (const a of ax) {
+                if (Math.hypot(mx - a.x, my - a.y) <= 13) return a.key;
+            }
+            return null;
+        },
+
+        /** 三个轴在坐标轴小画布上的落点（屏幕坐标） */
+        _gizmoAxes() {
+            const g = this.gizmo;
+            const w = (g && g.clientWidth) || 96, h = (g && g.clientHeight) || 96;
+            const cx = w / 2, cy = h / 2;
+            const b = this._basis();
+            const L = Math.min(w, h) * 0.34;
             return [
-                this.target[0] + this.dist * cp * Math.sin(this.yaw),
-                this.target[1] + this.dist * sp,
-                this.target[2] + this.dist * cp * Math.cos(this.yaw)
-            ];
+                { key: 'x', v: [1, 0, 0], color: '#CE6A63', label: 'X' },
+                { key: 'y', v: [0, 1, 0], color: '#5CA36E', label: 'Y' },
+                { key: 'z', v: [0, 0, 1], color: '#5B84C9', label: 'Z' }
+            ].map(a => {
+                const sx = dot3(a.v, b.r), sy = -dot3(a.v, b.u);
+                const depth = dot3(a.v, b.f);       // 越大越朝观众
+                return { ...a, x: cx + sx * L, y: cy + sy * L, sx, sy, depth };
+            });
         },
 
         /**
-         * 世界点 → 屏幕像素（相对 canvas 左上角，CSS px）。
-         * 是 _ray 的反向：拾取算错时先拿它跟 _ray 对一遍，能立刻看出是投影还是求交的问题。
+         * 1:1 跟手平移：屏幕移多少像素，铺在目标平面上的内容就跟着移多少像素。
+         * 拖动方向 → 内容跟手（所以 target 往反方向走）。
          */
-        project(p) {
-            var c = this.canvas;
-            var eye = this._eye();
-            var proj = mPerspective(this.fov, (c.width || 1) / (c.height || 1), 0.5, 6000);
-            var view = mLookAt(eye, this.target, [0, 1, 0]);
-            var m = mul(proj, view);
-            var x = p[0], y = p[1], z = p[2];
-            var cx = m[0] * x + m[4] * y + m[8] * z + m[12];
-            var cy = m[1] * x + m[5] * y + m[9] * z + m[13];
-            var cw = m[3] * x + m[7] * y + m[11] * z + m[15];
-            if (Math.abs(cw) < 1e-9) return null;
-            var dpr = this.dpr || 1;
-            return {
-                x: (cx / cw + 1) / 2 * (c.width / dpr),
-                y: (1 - cy / cw) / 2 * (c.height / dpr),
-                z: cw
-            };
+        _panBy(dx, dy) {
+            var k = this._worldPerPx();
+            var b = this._basis();
+            // 屏幕上方向在水平面上的投影（俯视时退化，这时用相机 up 的投影兜底）
+            var upH = [-Math.sin(this.yaw), Math.cos(this.yaw), 0];
+            if (Math.hypot(upH[0], upH[1]) < 1e-4) upH = [0, 1, 0];
+            this.target[0] += (-b.r[0] * dx + upH[0] * dy) * k;
+            this.target[1] += (-b.r[1] * dx + upH[1] * dy) * k;
+            this._dirty = true;
         },
 
-        /** 屏幕坐标 → 世界射线 {o, d}。拾取用，测试也算它。 */
+        /**
+         * 屏幕点 → 世界射线 {o, d}。透视走相机原点，正交走屏幕平面偏移。
+         * 拾取和测试都靠它。
+         */
         _ray(clientX, clientY) {
             var r = this.canvas.getBoundingClientRect();
             var nx = ((clientX - r.left) / r.width) * 2 - 1;
             var ny = 1 - ((clientY - r.top) / r.height) * 2;
 
-            var eye = this._eye();
-            // 视线基向量必须跟 mLookAt 同一套推导，不能自己另推一遍：
-            // mLookAt 里 z = normalize(eye - center)（指向相机后方），
-            // 而这里若用 f = center - eye 再拿 (f.z,0,-f.x) 当 right，符号正好差一个负号，
-            // 结果是「射线左右镜像」，点左边那块选中右边那块，且不报任何错。
-            var zx = eye[0] - this.target[0];
-            var zy = eye[1] - this.target[1];
-            var zz = eye[2] - this.target[2];
-            var zl = Math.hypot(zx, zy, zz) || 1;
-            zx /= zl; zy /= zl; zz /= zl;
-
-            // right = normalize(worldUp × z)
-            var rx = zz, rz = -zx;
-            var rl = Math.hypot(rx, rz) || 1;
-            rx /= rl; rz /= rl;
-            // up = z × right
-            var ux = zy * rz - zz * 0;
-            var uy = zz * rx - zx * rz;
-            var uz = zx * 0 - zy * rx;
-            // 视线朝前 = -z
-            var fx = -zx, fy = -zy, fz = -zz;
-
+            var b = this._basis();
             var aspect = (this.canvas.width || 1) / (this.canvas.height || 1);
             var th = Math.tan(this.fov / 2);
+
+            if (this.ortho) {
+                var hh = this.dist * th;
+                var hw = hh * aspect;
+                // 起点要退到"眼睛那一层"再往前打：留在 target 平面上就会把
+                // 目标平面之后的板全漏掉（俯视时 z=0 起手，板全在它上面 → 一个都点不中）
+                var back = -this.dist;
+                return {
+                    o: [
+                        this.target[0] + b.r[0] * nx * hw + b.u[0] * ny * hh + b.f[0] * back,
+                        this.target[1] + b.r[1] * nx * hw + b.u[1] * ny * hh + b.f[1] * back,
+                        this.target[2] + b.r[2] * nx * hw + b.u[2] * ny * hh + b.f[2] * back
+                    ],
+                    d: b.f
+                };
+            }
             return {
-                o: eye,
-                d: [
-                    fx + rx * nx * th * aspect + ux * ny * th,
-                    fy + 0 * nx * th * aspect + uy * ny * th,
-                    fz + rz * nx * th * aspect + uz * ny * th
-                ]
+                o: b.eye,
+                d: norm3([
+                    b.f[0] + b.r[0] * nx * th * aspect + b.u[0] * ny * th,
+                    b.f[1] + b.r[1] * nx * th * aspect + b.u[1] * ny * th,
+                    b.f[2] + b.r[2] * nx * th * aspect + b.u[2] * ny * th
+                ])
             };
         },
 
@@ -880,10 +1002,10 @@
                 var o = xformPoint(it.inv, eye);
                 var d = xformDir(it.inv, dir);
 
-                // 局部包围盒：[±w/2] × [0,THICK] × [±h/2]
-                var lo = [-it.w / 2, 0, -it.h / 2];
-                var hi = [it.w / 2, THICK, it.h / 2];
-                var t0 = 0, t1 = Infinity;
+                // 局部包围盒：[±w/2] × [±h/2] × [0,THICK]
+                var lo = [-it.w / 2, -it.h / 2, 0];
+                var hi = [it.w / 2, it.h / 2, THICK];
+                var t0 = -Infinity, t1 = Infinity;
                 for (var a = 0; a < 3; a++) {
                     if (Math.abs(d[a]) < 1e-9) {
                         if (o[a] < lo[a] || o[a] > hi[a]) return;
@@ -896,19 +1018,21 @@
                     if (tb < t1) t1 = tb;
                     if (t0 > t1) return;
                 }
-                if (t0 <= 0 || t0 >= bestT) return;
+                if (t1 <= 0) return;
+                var th = t0 > 0 ? t0 : 0;
+                if (th >= bestT) return;
 
-                // 命中点 → 格子 → 有没有豆
-                var hx = o[0] + d[0] * t0;
-                var hz = o[2] + d[2] * t0;
+                // 命中点 → 格子 → 有没有豆（第 0 行在 +y）
+                var hx = o[0] + d[0] * th;
+                var hy = o[1] + d[1] * th;
                 var gx = Math.floor(hx + it.w / 2);
-                var gy = Math.floor(hz + it.h / 2);
+                var gy = Math.floor(it.h / 2 - hy);
                 var mask = it.shape && it.shape.mask;
                 if (mask && it.shape.filled > 0) {
                     if (gx < 0 || gx >= it.w || gy < 0 || gy >= it.h) return;
                     if (!mask[gy * it.w + gx]) return;      // 空位 = 没有实体，点不中
                 }
-                bestT = t0;
+                bestT = th;
                 best = it.id;
             });
 
@@ -999,15 +1123,15 @@
             gl.enable(gl.CULL_FACE);
             gl.cullFace(gl.BACK);
 
-            var eye = this._eye();
-            var proj = mPerspective(this.fov, c.width / c.height, 0.5, 6000);
-            var view = mLookAt(eye, this.target, [0, 1, 0]);
+            var b = this._basis();
+            var proj = this._proj(c.width / c.height);
+            var view = mLookAt(b.eye, this.target, b.up);
 
             gl.useProgram(this.prog);
             var L = this.loc;
             gl.uniformMatrix4fv(L.uProj, false, proj);
             gl.uniformMatrix4fv(L.uView, false, view);
-            gl.uniform3fv(L.uEye, new Float32Array(eye));
+            gl.uniform3fv(L.uEye, new Float32Array(b.eye));
             gl.uniform1i(L.uTex, 0);
             gl.activeTexture(gl.TEXTURE0);
 
@@ -1054,7 +1178,9 @@
                 if (sit) self._drawSelect(sit);
             }
 
+            this._paintGizmo();
             this._dirty = false;
+            if (this.onCamera) this.onCamera();
         },
 
         /** 选中：沿形状交界描一圈（贴顶面略抬高，正常吃深度遮挡） */
@@ -1085,13 +1211,14 @@
             gl.uniform3f(L.uColor, 1, 1, 1);
         },
 
-        /** 在板上套一圈线框。grow=1 贴着板，1.6 是选中框（抬高一点避免 z-fighting） */
+        /** 在板上套一圈线框（空区域提示用） */
         _drawBox(it, color, grow) {
             var gl = this.gl, L = this.loc;
             var model = it.model || this._modelOf(it);
-            // 放大一点 + 抬高：跟板面共面会 z-fighting，边线一闪一闪的
-            var boxModel = mul(model, mScale(it.w * 1.016, THICK * grow + 0.6, it.h * 1.016));
-            boxModel = mul(boxModel, mTranslate(0, 0.5, 0));
+            // 单位立方体是以原点为中心的：板的 z 范围是 [0,THICK]，
+            // 所以得先抬 THICK/2 再缩放，不是简单放大就行
+            var boxModel = mul(model, mTranslate(0, 0, THICK / 2));
+            boxModel = mul(boxModel, mScale(it.w * 1.016, it.h * 1.016, THICK * grow));
             gl.uniformMatrix4fv(L.uModel, false, boxModel);
             gl.uniformMatrix3fv(L.uNormalMat, false, new Float32Array([
                 boxModel[0], boxModel[1], boxModel[2],
@@ -1112,16 +1239,98 @@
             gl.uniform3f(L.uColor, 1, 1, 1);
         },
 
-        /** 实例的世界矩阵：T(2D 位置 + local 偏移) · Ry · Rx · Rz · 镜像 */
+        /**
+         * 右上角坐标轴：画三个轴，顺便把当前是「透视 / 正视 / 俯视」写在下沿。
+         * 这是纯 2D 画布，跟 GL 无关 —— 它只是个指示灯 + 按钮。
+         */
+        _paintGizmo() {
+            const g = this.gizmo;
+            if (!g) return;
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+            const w = g.clientWidth || 96, h = g.clientHeight || 96;
+            if (g.width !== Math.round(w * dpr) || g.height !== Math.round(h * dpr)) {
+                g.width = Math.round(w * dpr);
+                g.height = Math.round(h * dpr);
+            }
+            const ctx = g.getContext('2d');
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.clearRect(0, 0, w, h);
+
+            const cx = w / 2, cy = h / 2 - 5;
+            const axes = this._gizmoAxes();
+            // 远的先画，近的后画，叠起来才有前后感
+            axes.slice().sort((a, b) => a.depth - b.depth).forEach(a => {
+                const len = Math.hypot(a.x - cx, a.y - cy);
+                const hot = this._gizmoHot === a.key;
+                ctx.beginPath();
+                ctx.moveTo(cx, cy);
+                ctx.lineTo(cx + (a.x - cx) * (len > 6 ? 1 : 0.2), cy + (a.y - cy) * (len > 6 ? 1 : 0.2));
+                ctx.strokeStyle = a.color;
+                ctx.lineWidth = hot ? 2.6 : 1.8;
+                ctx.stroke();
+
+                const bx = cx + (a.x - cx) * (len > 6 ? 1 : 0.2);
+                const by = cy + (a.y - cy) * (len > 6 ? 1 : 0.2);
+                ctx.beginPath();
+                ctx.arc(bx, by, hot ? 9 : 7.5, 0, Math.PI * 2);
+                ctx.fillStyle = a.color;
+                ctx.globalAlpha = a.depth < -0.35 ? 0.55 : 1;   // 朝背面画淡一点
+                ctx.fill();
+                ctx.globalAlpha = 1;
+
+                ctx.fillStyle = '#fff';
+                ctx.font = '700 9.5px system-ui, -apple-system, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(a.label, bx, by + 0.5);
+            });
+
+            // 中心小方块：点它回透视
+            const hotC = this._gizmoHot === 'center';
+            ctx.beginPath();
+            ctx.arc(cx, cy, hotC ? 5 : 4, 0, Math.PI * 2);
+            ctx.fillStyle = hotC ? '#6B4EF2' : 'rgba(90,96,108,.55)';
+            ctx.fill();
+
+            const mode = this.axisView();
+            ctx.font = '600 9.5px system-ui, -apple-system, sans-serif';
+            ctx.fillStyle = 'rgba(90,96,108,.85)';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(mode === 'z' ? '俯视' : mode === 'y' ? '正视' : mode === 'x' ? '侧视'
+                : this.ortho ? '正交' : '透视', cx, h - 8);
+        },
+
+        /** 实例的世界矩阵：T(世界位置) · Rz · Ry · Rx · 镜像（Blender 的 XYZ Euler） */
         _modelOf(it) {
             var p = (it.local && it.local.pos) || [0, 0, 0];
             var rot = (it.local && it.local.rot) || [0, 0, 0];
-            var model = mTranslate(it.cx + (p[0] || 0), p[1] || 0, it.cz + (p[2] || 0));
+            var model = mTranslate(it.cx + (p[0] || 0), it.cy + (p[1] || 0), p[2] || 0);
+            model = mul(model, mRotZ(rot[2] || 0));
             model = mul(model, mRotY(rot[1] || 0));
             model = mul(model, mRotX(rot[0] || 0));
-            model = mul(model, mRotZ(rot[2] || 0));
             if (it.local && it.local.flipX) model = mul(model, mScale(-1, 1, 1));
             return model;
+        },
+
+        /** 世界点 → 屏幕像素（相对 canvas 左上角，CSS px）。_ray 的反向，测试和标签都用它。 */
+        project(p) {
+            var c = this.canvas;
+            var b = this._basis();
+            var proj = this._proj((c.width || 1) / (c.height || 1));
+            var view = mLookAt(b.eye, this.target, b.up);
+            var m = mul(proj, view);
+            var x = p[0], y = p[1], z = p[2];
+            var cx = m[0] * x + m[4] * y + m[8] * z + m[12];
+            var cy = m[1] * x + m[5] * y + m[9] * z + m[13];
+            var cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+            if (Math.abs(cw) < 1e-9) return null;
+            var dpr = this.dpr || 1;
+            return {
+                x: (cx / cw + 1) / 2 * (c.width / dpr),
+                y: (1 - cy / cw) / 2 * (c.height / dpr),
+                z: cw
+            };
         }
     };
 
