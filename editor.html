@@ -324,6 +324,27 @@
                         <button class="tp-btn" id="regionRenameBtn" type="button">重命名当前区域</button>
                     </section>
 
+                    <!-- ============ 命令：导入 ============ -->
+                    <section class="ip-sec" data-panel="cmd:import">
+                        <div class="ip-title">导入图片</div>
+
+                        <div class="tp-row">
+                            <span class="tp-label">长边</span>
+                            <input class="tp-input" type="number" id="impCols" min="8" max="96" step="1" value="40" inputmode="numeric">
+                            <span class="size-unit">格</span>
+                        </div>
+
+                        <button class="tp-btn tp-btn-primary" id="impImageBtn" type="button">选择图片…</button>
+                        <p class="cmd-hint">图片按等比缩放到指定格数，逐格取最近色号（Lab 色差），透明处留空。</p>
+
+                        <div class="ip-title ip-title-gap">旧图纸</div>
+                        <div class="size-meta" id="impLegacyMeta">—</div>
+                        <button class="tp-btn" id="impLegacyBtn" type="button">迁移为区域</button>
+                        <p class="cmd-hint">旧版存在浏览器里的图纸会按 8 格间距并排铺开，整批只占一条撤销记录。</p>
+
+                        <input type="file" id="impFile" accept="image/*" hidden>
+                    </section>
+
                     <!-- ============ 命令：颜色转换 ============ -->
                     <section class="ip-sec" data-panel="cmd:colorConvert">
                         <div class="ip-title">颜色转换</div>

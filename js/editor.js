@@ -310,14 +310,27 @@
     }
 
     // 新建区域：落在不重叠位置，绑定为当前区域，记入历史
-    function addRegion(x, y, w, h, name) {
+    /**
+     * 只建区域、不拍撤销快照（批量导入要合并成一条历史）。
+     * 落点会和已有区域防重叠，实际坐标以返回值为准。
+     */
+    function createRegionRaw(x, y, w, h, name, cells) {
         w = clamp(Math.round(w) || 29, MIN_BOARD, MAX_BOARD);
         h = clamp(Math.round(h) || 29, MIN_BOARD, MAX_BOARD);
         const r = makeRegion(x, y, w, h, name || '未命名区域');
+        if (Array.isArray(cells)) {
+            r.cells = cells.slice(0, w * h);
+            while (r.cells.length < w * h) r.cells.push('');
+        }
         W.regions.push(r);
         resolveRegionOverlap(r);
+        return r;
+    }
+
+    function addRegion(x, y, w, h, name, cells, label) {
+        const r = createRegionRaw(x, y, w, h, name, cells);
         bindRegion(r);
-        snapshot('新建区域');
+        snapshot(label || '新建区域');
         markDirty();
         requestRender();
         return r;
@@ -338,6 +351,268 @@
         markDirty();
         requestRender();
         return true;
+    }
+
+    /* =========================================================
+     * 导入：旧图纸 → 区域 / 图片 → 区域
+     *
+     * 两条入口，同一个出口：拿到 { w, h, cells }，再变成一个区域。
+     * 差别只在前半段——旧图纸尺寸是现成的，图片要先量化成色号。
+     *
+     * 导入的区域一律走"跟随鼠标放置"：先看清楚多大、放哪块，
+     * 而不是被硬塞到某个角落再让用户去找。
+     * ========================================================= */
+
+    const REGION_GAP = 8;                  // 并排时的空隙（格）
+    const MIGRATED_FLAG = 'perler.migrated.v1';
+    const IMPORT_MAX_CELLS = 96;           // 单边格数上限，再大就不是拼豆了
+
+    /** 旧版存在 localStorage 里的图纸（v2：{name, cols, rows, grid, palette, savedAt}）。 */
+    function readLegacyDesigns() {
+        try {
+            const list = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+            if (!Array.isArray(list)) return [];
+            return list.filter(d => d && Array.isArray(d.grid) && d.cols > 0 && d.rows > 0);
+        } catch (_) { return []; }
+    }
+
+    function legacyMigrated() {
+        try { return localStorage.getItem(MIGRATED_FLAG) === '1'; } catch (_) { return false; }
+    }
+
+    function markLegacyMigrated() {
+        try { localStorage.setItem(MIGRATED_FLAG, '1'); } catch (_) { }
+    }
+
+    /** 新区域该排在哪儿：所有区域外接矩形的右侧，留 REGION_GAP 空隙。 */
+    function nextRegionOrigin() {
+        const b = worldBounds();
+        if (!b) return { x: 0, y: 0 };
+        return { x: b.x1 + REGION_GAP, y: b.y0 };
+    }
+
+    /**
+     * 旧图纸一次性迁成区域：按 REGION_GAP 排成一行，整批只进一条撤销记录
+     * （30 张各拍一条会把撤销栈冲没了）。
+     */
+    function migrateLegacyDesigns(opts) {
+        const force = !!(opts && opts.force);
+        if (!force && legacyMigrated()) return [];
+        const list = readLegacyDesigns();
+        if (!list.length) return [];
+
+        const origin = nextRegionOrigin();
+        let x = origin.x;
+        const made = [];
+
+        for (const d of list) {
+            const w = clamp(d.cols | 0, 1, MAX_BOARD);
+            const h = clamp(d.rows | 0, 1, MAX_BOARD);
+            const cells = new Array(w * h).fill('');
+            // 色号不在当前色卡里的直接丢——留着会画出认不出的颜色
+            for (let i = 0; i < cells.length; i++) {
+                const code = d.grid[i];
+                if (code && PAL_MAP.has(code)) cells[i] = code;
+            }
+            const r = createRegionRaw(x, origin.y, w, h, String(d.name || '旧图纸'), cells);
+            made.push(r);
+            // 用实际落点续排：防重叠可能把它推走过
+            x = r.x + r.w + REGION_GAP;
+        }
+
+        markLegacyMigrated();
+        if (made.length) {
+            // 迁之前是空白画布 → 直接把当前区域落到第一张迁入的图纸上；
+            // 已经有活儿在干 → 保持用户的上下文不动，只把视野拉开
+            const wasBlank = !D.grid.some(Boolean);
+            if (wasBlank) bindRegion(made[0]);
+            snapshot('迁移旧图纸');
+            markDirty();
+            fitView();          // 不拉开视野的话，迁进来的东西全在屏幕外
+        }
+        return made;
+    }
+
+    /* ---------- 图片量化 ---------- */
+
+    let palLabCache = null;
+
+    /** 色卡转 Lab（deltaE2000 只用得上 Lab），色卡变了就重建。 */
+    function paletteLabs() {
+        if (palLabCache && palLabCache.src === PAL) return palLabCache.list;
+        palLabCache = {
+            src: PAL,
+            list: PAL.map(p => ({ code: p.code, lab: rgbToLab(p.rgb[0], p.rgb[1], p.rgb[2]) }))
+        };
+        return palLabCache.list;
+    }
+
+    /** 找最接近的色号（Lab + deltaE2000，比 RGB 欧氏距离准得多）。 */
+    function nearestCodeByRgb(r, g, b, cache) {
+        const key = (r << 16) | (g << 8) | b;
+        if (cache) {
+            const hit = cache.get(key);
+            if (hit !== undefined) return hit;
+        }
+        const labs = paletteLabs();
+        const lab = rgbToLab(r, g, b);
+        let best = '', bestD = Infinity;
+        for (let i = 0; i < labs.length; i++) {
+            const d = deltaE2000(lab, labs[i].lab);
+            if (d < bestD) { bestD = d; best = labs[i].code; }
+        }
+        if (cache) cache.set(key, best);
+        return best;
+    }
+
+    /**
+     * 图片 → 格子。
+     *
+     * 缩放到 w×h 之后，一个像素正好一格：浏览器缩放本身就是面积平均，
+     * 所以每格的"平均色"不用自己算，直接读缩放结果就行。
+     * maxCells 是长边上限，短边按原图比例缩——不裁图、不变形。
+     */
+    async function imageToCells(file, maxCells) {
+        const bmp = await createImageBitmap(file);
+        const ratio = bmp.width / bmp.height;
+        let lim = clamp(Math.round(maxCells) || 40, 8, IMPORT_MAX_CELLS);
+        let w, h;
+        if (ratio >= 1) { w = lim; h = Math.max(1, Math.round(lim / ratio)); }
+        else { h = lim; w = Math.max(1, Math.round(lim * ratio)); }
+        w = clamp(w, 1, IMPORT_MAX_CELLS);
+        h = clamp(h, 1, IMPORT_MAX_CELLS);
+
+        const cv = document.createElement('canvas');
+        cv.width = w; cv.height = h;
+        const g = cv.getContext('2d');
+        g.imageSmoothingEnabled = true;
+        g.imageSmoothingQuality = 'high';
+        g.drawImage(bmp, 0, 0, w, h);
+        const data = g.getImageData(0, 0, w, h).data;
+        if (bmp.close) bmp.close();
+
+        const cells = new Array(w * h).fill('');
+        const cache = new Map();
+        let filled = 0;
+        for (let i = 0; i < w * h; i++) {
+            const o = i * 4;
+            if (data[o + 3] < 128) continue;      // 透明格留空，不硬填成白豆
+            const code = nearestCodeByRgb(data[o], data[o + 1], data[o + 2], cache);
+            if (code) { cells[i] = code; filled++; }
+        }
+        return { w, h, cells, filled };
+    }
+
+    /* ---------- 放置模式：区域跟着鼠标走 ---------- */
+
+    /**
+     * 待放置的图纸。非 null 时：
+     *   - 绘制层画半透明预览，位置跟随光标格；
+     *   - 左键落位（落点防重叠），Esc 取消；
+     *   - 中键 / 空格仍可平移，方便先挪视野再放。
+     */
+    let placing = null;
+
+    /** 让光标所在格成为预览的中心，视觉上更跟手。 */
+    function placingOriginAt(c, r) {
+        if (!placing) return { x: c, y: r };
+        return {
+            x: c - Math.floor(placing.w / 2),
+            y: r - Math.floor(placing.h / 2)
+        };
+    }
+
+    /** 预览矩形当前是否撞到已有区域（只用于给边框换色提示）。 */
+    function placingCollides() {
+        if (!placing) return false;
+        const box = { x: placing.x, y: placing.y, w: placing.w, h: placing.h };
+        return W.regions.some(o => regionsOverlap(box, o));
+    }
+
+    /**
+     * 放置预览的离屏位图。
+     *
+     * 跟随光标时每挪一格就要重画一帧，96×96 的图逐格画是 9216 次 fill——
+     * 拖动会明显掉帧。所以按 cell 量化后渲染一次，之后只 drawImage。
+     * 太夸张的尺寸直接不缓存（像素预算），退回逐格画。
+     */
+    const PLACE_BITMAP_MAX_PX = 3.2e6;
+
+    function placingBitmap(cell) {
+        if (!placing) return null;
+        const q = Math.max(2, Math.round(cell));
+        if (placing._bmp && placing._bmpCell === q) return placing._bmp;
+
+        const pw = placing.w * q, ph = placing.h * q;
+        if (pw * ph > PLACE_BITMAP_MAX_PX) { placing._bmp = null; placing._bmpCell = -1; return null; }
+
+        if (!placing._bmp) placing._bmp = document.createElement('canvas');
+        const cv = placing._bmp;
+        cv.width = pw; cv.height = ph;
+        const g = cv.getContext('2d');
+        g.fillStyle = state.emptyColor || '#ffffff';
+        g.fillRect(0, 0, pw, ph);
+
+        const drawCodes = q >= 20;
+        for (let y = 0; y < placing.h; y++) {
+            const row = y * placing.w;
+            for (let x = 0; x < placing.w; x++) {
+                const code = placing.cells[row + x];
+                if (code) drawBead(x * q, y * q, q, code, drawCodes, g, true);
+            }
+        }
+        placing._bmpCell = q;
+        return cv;
+    }
+
+    function beginPlacement(w, h, cells, name) {
+        const cell = view.scale || 22;
+        // 先放到视野中心，省得用户一开始就找不到预览跑哪去了
+        const vw = vp.clientWidth, vh = vp.clientHeight;
+        const cx = Math.round((vw / 2 - view.x) / cell);
+        const cy = Math.round((vh / 2 - view.y) / cell);
+        const cw = clamp(Math.round(w) || 29, 1, MAX_BOARD);
+        const chh = clamp(Math.round(h) || 29, 1, MAX_BOARD);
+        const cells2 = cells && cells.length
+            ? cells.slice(0, cw * chh)
+            : new Array(cw * chh).fill('');
+        while (cells2.length < cw * chh) cells2.push('');
+
+        placing = {
+            w: cw,
+            h: chh,
+            cells: cells2,
+            name: name || '导入图纸',
+            x: 0, y: 0
+        };
+        const o = placingOriginAt(cx, cy);
+        placing.x = o.x; placing.y = o.y;
+        toast('移动鼠标选位置 · 左键放下 · Esc 取消');
+        requestRender();
+        return placing;
+    }
+
+    function cancelPlacement(silent) {
+        if (!placing) return false;
+        placing = null;
+        requestRender();
+        if (!silent) toast('已取消放置');
+        return true;
+    }
+
+    /** 落位：建区域 + 灌格子 + 防重叠，一条撤销记录。 */
+    function commitPlacement(c, r) {
+        if (!placing) return null;
+        const cur = placing;
+        const o = placingOriginAt(c, r);
+        const reg = addRegion(o.x, o.y, cur.w, cur.h, cur.name, cur.cells, '导入图纸');
+        reg._cacheDirty = true;
+        placing = null;
+        syncRegionMeta();
+        const nm = reg.name && reg.name !== '未命名区域' ? reg.name : '区域 ' + reg.id;
+        toast(`已放好「${nm}」 ${reg.w}×${reg.h}`);
+        requestRender();
+        return reg;
     }
 
     // 区域标签的屏幕矩形（绘制与命中检测共用）。
@@ -1505,6 +1780,71 @@
             }
         }
 
+        /* 放置预览：导入的图纸跟着光标走。
+           必须画在最外层（区域底板、豆子、网格都画完之后），
+           否则会被后面的区域盖住——它在 drawDrafts 里的时候就是这么丢的。
+           半透明画，撞到已有区域时边框转红，不用等到松手才知道放歪了。 */
+        if (placing) {
+            const cell = view.scale;
+            const px = view.x + placing.x * cell;
+            const py = view.y + placing.y * cell;
+            const pw = placing.w * cell, ph = placing.h * cell;
+
+            ctx.save();
+            ctx.globalAlpha = .82;
+
+            const bmp = placingBitmap(cell);
+            if (bmp) {
+                // 量化过的位图直接拉伸到目标尺寸，拖动时光标换格也不用重画
+                ctx.drawImage(bmp, px, py, pw, ph);
+            } else {
+                ctx.fillStyle = state.emptyColor || '#ffffff';
+                ctx.fillRect(px, py, pw, ph);
+                for (let yy = 0; yy < placing.h; yy++) {
+                    const row = yy * placing.w;
+                    for (let xx = 0; xx < placing.w; xx++) {
+                        const code = placing.cells[row + xx];
+                        if (!code) continue;
+                        const p = PAL_MAP.get(code);
+                        if (!p) continue;
+                        const sx = px + xx * cell, sy = py + yy * cell;
+                        ctx.fillStyle = p.hex;
+                        if (cell >= 10) {
+                            ctx.beginPath();
+                            roundRect(ctx, sx + .5, sy + .5, cell - 1, cell - 1, Math.min(cell * .22, 4));
+                            ctx.fill();
+                        } else {
+                            ctx.fillRect(sx, sy, cell, cell);
+                        }
+                    }
+                }
+            }
+            ctx.globalAlpha = 1;
+
+            const bad = placingCollides();
+            ctx.strokeStyle = bad ? 'rgba(226,58,58,.95)' : 'rgba(108,76,241,.95)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6, 4]);
+            ctx.strokeRect(px + .5, py + .5, pw - 1, ph - 1);
+            ctx.setLineDash([]);
+
+            // 尺寸标签压在框的左上外沿，别盖住图纸本身
+            const txt = `${placing.w} × ${placing.h}`;
+            const fs = 12;
+            ctx.font = `600 ${fs}px system-ui, -apple-system, sans-serif`;
+            const tw = ctx.measureText(txt).width;
+            const by = Math.max(py - 22, 2);
+            ctx.fillStyle = bad ? 'rgba(226,58,58,.95)' : 'rgba(84,55,216,.95)';
+            ctx.beginPath();
+            roundRect(ctx, px, by, tw + 14, 18, 4);
+            ctx.fill();
+            ctx.fillStyle = '#fff';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(txt, px + 7, by + 9.5);
+            ctx.restore();
+        }
+
         ctx.restore();
     }
 
@@ -2148,6 +2488,49 @@
             toast('已重命名');
         });
         $('regionName').addEventListener('keydown', e => { if (e.key === 'Enter') $('regionRenameBtn').click(); });
+    }
+
+    // 导入面板：图片 / 旧图纸
+    if ($('impImageBtn')) {
+        $('impImageBtn').addEventListener('click', () => $('impFile').click());
+
+        $('impFile').addEventListener('change', async (e) => {
+            const file = e.target.files && e.target.files[0];
+            e.target.value = '';                    // 同一个文件能连选两次
+            if (!file) return;
+
+            const lim = clamp(Number($('impCols').value) || 40, 8, IMPORT_MAX_CELLS);
+            toast('正在读取图片…');
+            try {
+                const got = await imageToCells(file, lim);
+                if (!got.filled) { toast('这张图全是透明像素，没东西可导'); return; }
+                const nm = (file.name || '导入图纸').replace(/\.[^.]+$/, '');
+                beginPlacement(got.w, got.h, got.cells, nm);
+            } catch (err) {
+                toast('图片读不了：' + (err && err.message ? err.message : '未知错误'));
+            }
+        });
+
+        $('impLegacyBtn').addEventListener('click', () => {
+            const list = readLegacyDesigns();
+            if (!list.length) { toast('没有找到旧图纸'); return; }
+            const made = migrateLegacyDesigns({ force: true });
+            if (!made.length) { toast('这次没迁出图纸'); return; }
+            toast(`已迁移 ${made.length} 张旧图纸`);
+        });
+    }
+
+    function refreshImportPanel() {
+        if (!$('impLegacyMeta')) return;
+        const list = readLegacyDesigns();
+        const done = legacyMigrated();
+        if (!list.length) {
+            $('impLegacyMeta').textContent = '这台机器上没有旧图纸';
+            $('impLegacyBtn').disabled = true;
+        } else {
+            $('impLegacyMeta').textContent = `发现 ${list.length} 张旧图纸` + (done ? '（已迁移过，再点会重复导入）' : '');
+            $('impLegacyBtn').disabled = false;
+        }
     }
 
     function roundRect(c, x, y, w, h, r) {
@@ -3749,6 +4132,13 @@
             return;
         }
 
+        // 放置模式：左键落位（中键/空格平移已在上面先返回，仍可挪视野）
+        if (placing && e.button === 0) {
+            e.preventDefault();
+            commitPlacement(c, r);
+            return;
+        }
+
         // 多区域标签命中检测（常驻最上层，优先于任何工具）
         if (e.button === 0) {
             for (let i = W.regions.length - 1; i >= 0; i--) {
@@ -3915,6 +4305,16 @@
             const h = state.hover;
             if (!h || h.c !== c || h.r !== r) {
                 state.hover = { c, r };
+                requestRender();
+            }
+        }
+
+        // 放置中的预览跟着光标换位置（此时 drag 通常是 null）
+        if (placing) {
+            const o = placingOriginAt(c, r);
+            if (o.x !== placing.x || o.y !== placing.y) {
+                placing.x = o.x;
+                placing.y = o.y;
                 requestRender();
             }
         }
@@ -4112,6 +4512,13 @@
             return;
         }
 
+        // 放置模式：Esc 撤掉这次导入，别把预览一直挂在画布上
+        if (placing && e.key === 'Escape') {
+            e.preventDefault();
+            cancelPlacement();
+            return;
+        }
+
         if (e.code === 'Space' && !state.spaceDown) {
             state.spaceDown = true;
             canvas.classList.add('is-pan-ready');
@@ -4192,6 +4599,7 @@
         { sep: true },
         { id: 'canvas', name: '画布', emoji: '🔲', kind: 'cmd' },
         { id: 'region', name: '区域', emoji: '🗺️', kind: 'cmd' },
+        { id: 'import', name: '导入', emoji: '📥', kind: 'cmd' },
         { id: 'colorConvert', name: '颜色转换', emoji: '🔄', kind: 'cmd' },
         { id: 'colorRemove', name: '颜色剔除', emoji: '🚫', kind: 'cmd' },
         { id: 'quantize', name: '颜色量化', emoji: '🎯', kind: 'cmd' },
@@ -4792,6 +5200,10 @@
                 const nameInput = $('regionName');
                 if (document.activeElement !== nameInput) nameInput.value = (cur.name && cur.name !== '未命名区域') ? cur.name : '';
             }
+        }
+
+        if (id === 'import') {
+            refreshImportPanel();
         }
     }
 
@@ -6320,6 +6732,15 @@
         // 否则一进页面就往存档里写一份，跟用户动没动手没关系
         cancelPendingSave();
 
+        // 旧版图纸只躺在 localStorage 里，新的世界结构看不到它们——
+        // 第一次进来自动提一句，别让用户以为东西丢了
+        if (!legacyMigrated()) {
+            const legacy = readLegacyDesigns();
+            if (legacy.length) {
+                setTimeout(() => toast(`发现 ${legacy.length} 张旧图纸 · 左侧「导入」可迁移为区域`), 700);
+            }
+        }
+
         // 侧栏 / 次面板的宽度动画期间，容器每帧都在变尺寸；等它稳定下来再重设
         // backing store，否则每次 canvas.width 赋值都会清空画面，看着像在刷新
         let resizeTimer = null;
@@ -6355,6 +6776,17 @@
                 switchRegion: (r) => switchToRegion(r), switchToRegion,
                 regionCacheInfo: () => ({ size: regionCache.size, ids: Array.from(regionCache.keys()) }),
                 drawNow: () => draw(),
+                // 导入
+                readLegacyDesigns, migrateLegacyDesigns, legacyMigrated, markLegacyMigrated,
+                imageToCells, nearestCodeByRgb, paletteLabs,
+                createRegionRaw,
+                beginPlacement, cancelPlacement, commitPlacement,
+                placingInfo: () => placing ? {
+                    w: placing.w, h: placing.h, x: placing.x, y: placing.y,
+                    name: placing.name, cells: placing.cells.length,
+                    filled: placing.cells.filter(Boolean).length
+                } : null,
+                placingCollides,
                 // 持久化
                 serializeWorld, restoreWorld, markDirty, flushSave, saveWorldNow, cancelPendingSave,
                 store: window.WorldStore,
