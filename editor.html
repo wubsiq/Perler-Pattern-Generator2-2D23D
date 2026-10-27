@@ -24,6 +24,11 @@
         <div class="topbar-spacer"></div>
 
         <nav class="ed-actions">
+            <div class="ed-viewmode" id="viewMode" role="group" aria-label="视图模式">
+                <button class="ed-viewmode-btn is-on" id="btnView2d" type="button" title="2D 编辑">2D</button>
+                <button class="ed-viewmode-btn" id="btnView3d" type="button" title="3D 浏览（只读）">3D</button>
+            </div>
+
             <button class="btn btn-sm" id="btnHistory" type="button">
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2.4 8a5.6 5.6 0 105.6-5.6c-1.7 0-3.2.8-4.2 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M2 2.6v3.2h3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 5.4V8l1.9 1.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
                 <span>历史</span>
@@ -80,6 +85,8 @@
         <!-- 画布 -->
         <div class="ed-viewport" id="viewport">
             <canvas id="board"></canvas>
+            <!-- 3D 视图：跟 #board 互斥显示，同一份数据的另一个视图（不是导出） -->
+            <canvas id="board3d"></canvas>
 
             <!-- 画布尺寸手柄：跟着图纸走，拖四边/四角改格子数 -->
             <div class="ed-board-frame" id="boardFrame">
@@ -112,6 +119,12 @@
             <div class="ed-hud ed-hud-right">
                 <span class="ed-hint" id="edHint">滚轮缩放 · 空格拖动 · B 画笔 R 剃刀 G 填充 I 取色</span>
             </div>
+
+            <!-- 3D 视图的两条浮层：操作提示 / 选中信息 -->
+            <div class="ed-3d-hint">
+                <span>点击选中</span><i>·</i><span>拖动旋转</span><i>·</i><span>滚轮缩放</span><i>·</i><span>右键平移</span><i>·</i><span>双击复位</span>
+            </div>
+            <div class="ed-3d-pick" id="pick3d"></div>
         </div>
 
         <!-- 次面板（右侧）：默认图纸统计，选中工具时变成该工具属性 -->
@@ -840,6 +853,7 @@
     <script src="modules/InfoPaperManager.js"></script>
     <!-- 成品预览渲染（v1 的物理烫效果，独立模块）。纹理 318KB，点「预览成品」时才拉 --> 
     <script src="js/ironPreview.js"></script>
+    <script src="js/editor3d.js"></script>
     <script src="js/worldstore.js"></script>
     <script src="js/editor.js"></script>
 </body>

@@ -3325,3 +3325,123 @@ body.editor {
 }
 .ed-region-menu button:hover { background: #f1f2f6; }
 .ed-region-menu button.danger:hover { background: #fdecec; color: #d6453f; }
+
+/* =============================================================
+ * 顶部 2D / 3D 视图开关
+ * 分段式而不是单键 toggle：两个状态都写在脸上，用户不用猜「现在点一下会变成什么」
+ * ============================================================= */
+
+.ed-viewmode {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
+    margin-right: 4px;
+    border-radius: 8px;
+    background: #EDEFF4;
+    box-shadow: inset 0 0 0 1px rgba(20, 22, 26, .06);
+}
+
+.ed-viewmode-btn {
+    min-width: 40px;
+    padding: 5px 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #6B7280;
+    font: 600 12px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+    letter-spacing: .2px;
+    cursor: pointer;
+    transition: background .15s, color .15s, box-shadow .15s;
+}
+
+.ed-viewmode-btn:hover { color: #1F2430; }
+
+.ed-viewmode-btn.is-on {
+    background: #fff;
+    color: #1F2430;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, .10), 0 0 0 1px rgba(16, 24, 40, .05);
+}
+
+/* ---- 3D 画布 ---- */
+
+/* 绝对定位铺满：跟 #board 同层叠着，用 body 的 is-3d 类切换谁可见。
+   不用 [hidden] 属性，因为 #board 的 display:block 会把它顶掉。 */
+#board3d {
+    position: absolute;
+    inset: 0;
+    display: none;
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+}
+
+.editor.is-3d #board { display: none; }
+.editor.is-3d #board3d { display: block; }
+
+/* 3D 模式下 2D 专有的浮层要收起来，否则会飘在半空 */
+.editor.is-3d .ed-minimap,
+.editor.is-3d .ed-board-frame,
+.editor.is-3d .ed-zoom,
+.editor.is-3d .ed-hud { display: none !important; }
+
+/* 左侧工具栏 / 右侧属性面板在 3D 里没有意义：留着结构但置灰不可点，
+   切回 2D 立刻恢复（比整块 display:none 少一次重排，布局不会跳） */
+.editor.is-3d #toolSection,
+.editor.is-3d .tool-foot { opacity: .38; pointer-events: none; }
+
+/* 右侧面板在 3D 里会撒谎：它统计的是「2D 当前区域」，
+   而 3D 里没有"当前区域"这个概念（可以同时看着好几块）。
+   直接收起，3D 需要的信息由底部那条选中提示承担。 */
+.editor.is-3d .ed-insp { display: none; }
+
+/* 3D 操作提示：贴底部居中，不抢画面 */
+.ed-3d-hint {
+    position: absolute;
+    left: 50%;
+    bottom: 18px;
+    transform: translateX(-50%);
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 14px;
+    border-radius: 999px;
+    background: rgba(24, 26, 32, .78);
+    color: rgba(255, 255, 255, .92);
+    font: 500 12px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+    white-space: nowrap;
+    pointer-events: none;
+    backdrop-filter: blur(6px);
+    z-index: 6;
+}
+
+.editor.is-3d .ed-3d-hint { display: flex; }
+
+.ed-3d-hint i {
+    font-style: normal;
+    opacity: .55;
+}
+
+/* 3D 里被选中的板：底部浮一条信息 */
+.ed-3d-pick {
+    position: absolute;
+    left: 50%;
+    bottom: 54px;
+    transform: translateX(-50%);
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, .96);
+    box-shadow: 0 4px 16px rgba(16, 24, 40, .14), 0 0 0 1px rgba(16, 24, 40, .06);
+    color: #2A2D34;
+    font-size: 12.5px;
+    z-index: 7;
+}
+
+.editor.is-3d .ed-3d-pick.is-on { display: flex; }
+
+@media (max-width: 760px) {
+    .ed-viewmode-btn { min-width: 32px; padding: 5px 7px; font-size: 11px; }
+}

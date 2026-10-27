@@ -29,7 +29,11 @@ if (scriptMatch) {
 }
 
 // 2. 外链大文件：单独 new vm.Script 走一遍
-const EXTERNAL = ['js/editor.js', 'js/worldstore.js', 'js/ironPreview.js', 'js/colors.js', 'js/colorUtils.js'];
+// 注意：新增 js/*.js 一定要加进来，否则语法错只能等浏览器白屏才发现
+const EXTERNAL = [
+    'js/editor.js', 'js/editor3d.js', 'js/worldstore.js',
+    'js/ironPreview.js', 'js/colors.js', 'js/colorUtils.js'
+];
 for (const f of EXTERNAL) {
     if (!fs.existsSync(f)) { console.log(f, ': (missing, skip)'); continue; }
     const code = fs.readFileSync(f, 'utf8');

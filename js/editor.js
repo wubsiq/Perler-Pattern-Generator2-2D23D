@@ -1398,6 +1398,9 @@
 
     function draw() {
         regionCacheBudget = REGION_CACHE_BUDGET;
+        // 3D 模式下 #board 是隐藏的：继续画只是白烧 CPU（大图纸一帧几十毫秒），
+        // 而且会让 3D 的渲染帧率跟着掉。切回来时 setViewMode 会补一次 requestRender
+        if (view3d.mode === '3d') return;
         // 用 backing store 的尺寸而不是容器尺寸：侧栏/次面板做宽度动画时容器尺寸每帧都在变，
         // 这里跟着位图走，画面不会画到画布外面
         const W = canvas.width / dpr;
@@ -4512,6 +4515,30 @@
             return;
         }
 
+        // ---- 3D 浏览模式：键盘只服务相机与摆位 ----
+        // 必须整体 return：3D 里没有画笔/剃刀，让 B/R/Delete 漏下去会改到看不见的图纸
+        if (view3d.mode === '3d') {
+            const kk = e.key.toLowerCase();
+            const step = e.shiftKey ? 5 : 1;
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                view3d.picked = null;
+                if (view3d.inst) { view3d.inst.selectedId = null; view3d.inst._dirty = true; }
+                $('pick3d').classList.remove('is-on');
+                return;
+            }
+            if (e.key === 'ArrowLeft') { e.preventDefault(); nudge3d(0, -step); return; }
+            if (e.key === 'ArrowRight') { e.preventDefault(); nudge3d(0, step); return; }
+            if (e.key === 'ArrowUp') { e.preventDefault(); nudge3d(2, -step); return; }
+            if (e.key === 'ArrowDown') { e.preventDefault(); nudge3d(2, step); return; }
+            if (kk === 'q') { e.preventDefault(); rotate3d(-Math.PI / 12); return; }
+            if (kk === 'e') { e.preventDefault(); rotate3d(Math.PI / 12); return; }
+            if (kk === 'f') { e.preventDefault(); flip3d(); return; }
+            if (kk === 'r') { e.preventDefault(); reset3dTransform(); return; }
+            if (kk === '2') { e.preventDefault(); setViewMode('2d'); return; }
+            return;
+        }
+
         // 放置模式：Esc 撤掉这次导入，别把预览一直挂在画布上
         if (placing && e.key === 'Escape') {
             e.preventDefault();
@@ -4558,6 +4585,7 @@
         else if (k === 'g') setTool('fill');
         else if (k === 'i') setTool('picker');
         else if (k === 'm') setTool('select');
+        else if (k === '3') setViewMode('3d');
         else if (k === 'escape') {
             // 三段：丢掉没闭合的多边形 → 取消选区 → 释放工具
             if (state.poly.length) {
@@ -6376,7 +6404,186 @@
     }
 
     $('btnDownload').addEventListener('click', () => openDrawer('download'));
+    /* =========================================================
+     * 3D 视图（多实例）
+     *
+     * 跟「预览成品」的 3D 是两件事：
+     *   预览成品 = 单块、拟真、澡巾包边，看的是「做完长什么样」；
+     *   这里     = 所有区域一起摆在一个空间里，看的是「它们之间的位置关系」，
+     *              可以绕、可以拉远、可以逐块调位置/朝向/镜像。
+     *
+     * 数据只有一份：cells → 烘一张贴图 → 贴到板上。
+     * 3D 是只读浏览 + 摆位，绘制永远在 2D 做（工具面板进来就置灰）。
+     * ========================================================= */
+
+    const view3d = {
+        mode: '2d',
+        inst: null,          // Editor3D 实例，第一次切过去才建（没 WebGL 的机器不会白建）
+        picked: null         // 3D 里点中的区域 id
+    };
+
+    /** 把一块区域烘成贴图：一格 cellPx 像素。空位留板底色，不画白豆。 */
+    function bakeRegionTexture(r, cellPx) {
+        const cv = document.createElement('canvas');
+        cv.width = Math.max(1, Math.round(r.w * cellPx));
+        cv.height = Math.max(1, Math.round(r.h * cellPx));
+        const g = cv.getContext('2d');
+        g.fillStyle = state.emptyColor || '#FFFFFF';
+        g.fillRect(0, 0, cv.width, cv.height);
+        for (let y = 0; y < r.h; y++) {
+            const row = y * r.w;
+            for (let x = 0; x < r.w; x++) {
+                const code = r.cells[row + x];
+                if (!code) continue;
+                // raw=true：3D 里不该受「单色提亮」影响，颜色就是图纸的真实颜色
+                drawBead(x * cellPx, y * cellPx, cellPx, code, false, g, true);
+            }
+        }
+        return cv;
+    }
+
+    function ensure3d() {
+        if (view3d.inst) return view3d.inst;
+        try {
+            view3d.inst = new Editor3D($('board3d'));
+        } catch (err) {
+            return null;
+        }
+        view3d.inst.onPick = (id) => {
+            view3d.picked = id;
+            const bar = $('pick3d');
+            const r = id != null ? regionById(id) : null;
+            if (!r) {
+                bar.classList.remove('is-on');
+                bar.textContent = '';
+                return;
+            }
+            bar.classList.add('is-on');
+            // 用 textContent 拼，区域名是用户输入，别插 HTML
+            bar.textContent = `区域 ${r.id} · ${r.name} · ${r.w}×${r.h}` +
+                `　↑↓←→ 挪　Q/E 转　F 镜像　R 复位`;
+        };
+        return view3d.inst;
+    }
+
+    /**
+     * 把所有区域推给 3D。
+     * @param {boolean} rebake 是否重烘贴图（刚在 2D 改过内容就得重烘）
+     */
+    function sync3dInstances(rebake) {
+        const ed = view3d.inst;
+        if (!ed) return;
+        const alive = new Set();
+        for (const r of W.regions) {
+            alive.add(r.id);
+            // 一格 10~16px：低于 10 豆子之间就没缝了（drawBead 在 <10 时画实心块）
+            const cellPx = clamp(Math.floor(Editor3D.MAX_TEX / Math.max(r.w, r.h)), 10, 16);
+            let tex;
+            if (rebake || !r._tex3d) {
+                r._tex3d = bakeRegionTexture(r, cellPx);
+                tex = r._tex3d;
+            }
+            ed.setInstance(r.id, {
+                w: r.w,
+                h: r.h,
+                // 2D 世界坐标 → 3D 平面坐标。x 走 x，y 走 z，于是 3D 里的排布
+                // 跟 2D 看到的相对位置一致，用户不用重新建立空间感
+                cx: r.x + r.w / 2,
+                cz: r.y + r.h / 2,
+                local: r.local || { pos: [0, 0, 0], rot: [0, 0, 0], flipX: false }
+            }, tex);
+        }
+        Array.from(ed.items.keys()).forEach(id => {
+            if (!alive.has(id)) ed.removeInstance(id);
+        });
+    }
+
+    function setViewMode(mode, opts) {
+        opts = opts || {};
+        const next = mode === '3d' ? '3d' : '2d';
+        if (view3d.mode === next && !opts.force) return;
+
+        if (next === '3d') {
+            const ed = ensure3d();
+            if (!ed) {
+                toast('这台设备不支持 3D 视图（WebGL 不可用）');
+                return;
+            }
+            view3d.mode = '3d';
+            document.body.classList.add('is-3d');
+            $('btnView2d').classList.remove('is-on');
+            $('btnView3d').classList.add('is-on');
+
+            // 2D 期间一直在画，贴图必然是旧的 → 进来先全量重烘
+            sync3dInstances(true);
+            ed.resize();
+            if (opts.frame !== false) ed.frameAll();
+            ed.start();
+
+            view3d.picked = null;
+            $('pick3d').classList.remove('is-on');
+            $('pick3d').textContent = '';
+            // 3D 里没有「橡皮/画笔」这回事，把 2D 的待选工具收掉，免得切回来时状态错愕
+            closeRegionMenu();
+            return;
+        }
+
+        view3d.mode = '2d';
+        document.body.classList.remove('is-3d');
+        $('btnView2d').classList.add('is-on');
+        $('btnView3d').classList.remove('is-on');
+        if (view3d.inst) view3d.inst.stop();
+
+        // 3D 里挪过板（改了 local）→ 回 2D 要落盘
+        markDirty();
+        requestRender();
+    }
+
+    /** 3D 里对选中板做的变换：挪 / 转 / 镜像 / 复位 */
+    function nudge3d(axis, delta) {
+        const r = view3d.picked != null ? regionById(view3d.picked) : null;
+        if (!r) return false;
+        const L = r.local || (r.local = { pos: [0, 0, 0], rot: [0, 0, 0], flipX: false });
+        L.pos[axis] = (L.pos[axis] || 0) + delta;
+        sync3dInstances(false);
+        markDirty();
+        return true;
+    }
+
+    function rotate3d(yawDelta) {
+        const r = view3d.picked != null ? regionById(view3d.picked) : null;
+        if (!r) return false;
+        const L = r.local || (r.local = { pos: [0, 0, 0], rot: [0, 0, 0], flipX: false });
+        // 吸到 15° 一档：自由旋转很难对齐「正对/侧 45°」这种看着舒服的角度
+        const step = Math.PI / 12;
+        L.rot[1] = Math.round(((L.rot[1] || 0) + yawDelta) / step) * step;
+        sync3dInstances(false);
+        markDirty();
+        return true;
+    }
+
+    function flip3d() {
+        const r = view3d.picked != null ? regionById(view3d.picked) : null;
+        if (!r) return false;
+        const L = r.local || (r.local = { pos: [0, 0, 0], rot: [0, 0, 0], flipX: false });
+        L.flipX = !L.flipX;
+        sync3dInstances(false);
+        markDirty();
+        return true;
+    }
+
+    function reset3dTransform() {
+        const r = view3d.picked != null ? regionById(view3d.picked) : null;
+        if (!r) return false;
+        r.local = { pos: [0, 0, 0], rot: [0, 0, 0], flipX: false };
+        sync3dInstances(false);
+        markDirty();
+        return true;
+    }
+
     $('btnIron').addEventListener('click', openIronPreview);
+    $('btnView2d').addEventListener('click', () => setViewMode('2d'));
+    $('btnView3d').addEventListener('click', () => setViewMode('3d'));
     $('btnHistory').addEventListener('click', () => { renderHistory(); historySheet.hidden = false; scrim.hidden = false; });
 
     $('drawerClose').addEventListener('click', closeDrawer);
@@ -6749,6 +6956,8 @@
             clearTimeout(resizeTimer);
             resizeTimer = setTimeout(() => {
                 resizeCanvas();
+                // 3D 画布不吃 resizeCanvas 那套（它自己按 clientWidth 算），单独叫一次
+                if (view3d.inst) { view3d.inst.resize(); view3d.inst._dirty = true; }
                 requestRender();
             }, 80);
         }).observe(vp);
@@ -6776,6 +6985,19 @@
                 switchRegion: (r) => switchToRegion(r), switchToRegion,
                 regionCacheInfo: () => ({ size: regionCache.size, ids: Array.from(regionCache.keys()) }),
                 drawNow: () => draw(),
+                // 3D 视图
+                setViewMode, view3d, ensure3d, sync3dInstances, bakeRegionTexture,
+                nudge3d, rotate3d, flip3d, reset3dTransform,
+                view3dInfo: () => ({
+                    mode: view3d.mode,
+                    picked: view3d.picked,
+                    w: $('board3d').width, h: $('board3d').height,
+                    cam: view3d.inst ? {
+                        yaw: view3d.inst.yaw, pitch: view3d.inst.pitch,
+                        dist: view3d.inst.dist, target: view3d.inst.target.slice()
+                    } : null,
+                    items: view3d.inst ? Array.from(view3d.inst.items.keys()) : []
+                }),
                 // 导入
                 readLegacyDesigns, migrateLegacyDesigns, legacyMigrated, markLegacyMigrated,
                 imageToCells, nearestCodeByRgb, paletteLabs,
