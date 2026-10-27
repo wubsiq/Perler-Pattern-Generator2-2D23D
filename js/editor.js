@@ -131,6 +131,11 @@
 
     // 把 D 重新指向某个区域（D.cells/grid 是同一个数组引用，改哪边都是改它）
     function bindRegion(r) {
+        // 离开的区域可能刚被改过（笔刷/填充都是原地写 cells），
+        // 它的快照下次画之前必须重建一次
+        const prev = regionById(D.id);
+        if (prev && prev.id !== r.id) prev._cacheDirty = true;
+
         D.id = r.id;
         D.x = r.x;
         D.y = r.y;
@@ -232,6 +237,27 @@
         return null;
     }
 
+    /**
+     * 切换当前区域（唯一入口）。
+     *
+     * 旧区域的选区 / 多边形顶点必须清掉——它们是**局部坐标**，
+     * 换个区域再用同样的 c/r 去解释就全错位了。
+     */
+    function switchToRegion(r) {
+        if (!r || r.id === D.id) return false;
+        bindRegion(r);
+        state.select = null;
+        state.poly = [];
+        state.hover = null;
+        syncSizePanel();
+        syncSelBar();
+        updateDocMeta();
+        renderStats();
+        markDirty();
+        requestRender();
+        return true;
+    }
+
     // 全部区域的外接矩形（小窗和相机适配用）
     function worldBounds() {
         if (!W.regions.length) return null;
@@ -308,6 +334,7 @@
             const nb = W.regions[Math.max(0, idx - 1)] || W.regions[0];
             if (nb) bindRegion(nb);
         }
+        pruneRegionCache();                      // 丢掉被删区域的快照
         markDirty();
         requestRender();
         return true;
@@ -777,10 +804,13 @@
         const h = vp.clientHeight;
         // 手机上留白收到 18：画布本来就窄，再留 56 等于把图纸缩一半
         const pad = window.innerWidth <= 760 ? 18 : 56;
-        const s = Math.min((w - pad * 2) / D.cols, (h - pad * 2) / D.rows);
+        // 多区域时要框住**全部区域的外接矩形**：
+        // 只按当前区域适配的话，切到另一块之后它永远在屏幕外，等于藏起来了
+        const b = worldBounds() || { x0: D.x, y0: D.y, w: D.cols, h: D.rows };
+        const s = Math.min((w - pad * 2) / b.w, (h - pad * 2) / b.h);
         view.scale = clamp(s, 4, 64);
-        view.x = (w - D.cols * view.scale) / 2;
-        view.y = (h - D.rows * view.scale) / 2;
+        view.x = (w - b.w * view.scale) / 2 - b.x0 * view.scale;
+        view.y = (h - b.h * view.scale) / 2 - b.y0 * view.scale;
         refScale = view.scale;      // 适应窗口 = 100%
         updateZoomLabel();
         requestRender();
@@ -796,7 +826,8 @@
         const w = vp.clientWidth;
         const h = vp.clientHeight;
         const pad = window.innerWidth <= 760 ? 18 : 56;
-        const s = Math.min((w - pad * 2) / D.cols, (h - pad * 2) / D.rows);
+        const b = worldBounds() || { w: D.cols, h: D.rows };
+        const s = Math.min((w - pad * 2) / b.w, (h - pad * 2) / b.h);
         refScale = clamp(s, 4, 64);
     }
 
@@ -876,37 +907,40 @@
      * 画一颗豆子。x/y 是格子左上角的屏幕坐标。
      * 区域内的豆子和草稿区的豆子共用这一套画法，两边看起来才一致。
      */
-    function drawBead(x, y, cell, code, drawCodes) {
+    function drawBead(x, y, cell, code, drawCodes, g, raw) {
         const p = PAL_MAP.get(code);
         if (!p) return;
+        // g：离屏快照（非当前区域）复用同一套画法；raw：跳过「单色提亮」，
+        // 因为快照缓存不随 state.focus 变，画进去就得一直是真实颜色
+        const c2 = g || ctx;
 
         // 单色提亮：非目标色统一画成淡灰，保留形状但不抢眼
-        if (state.focus && code !== state.focus) {
-            ctx.fillStyle = '#E7E8EC';
+        if (!raw && state.focus && code !== state.focus) {
+            c2.fillStyle = '#E7E8EC';
             if (cell >= 10) {
-                ctx.beginPath();
-                roundRect(ctx, x + 0.5, y + 0.5, cell - 1, cell - 1, Math.min(cell * 0.22, 4));
-                ctx.fill();
+                c2.beginPath();
+                roundRect(c2, x + 0.5, y + 0.5, cell - 1, cell - 1, Math.min(cell * 0.22, 4));
+                c2.fill();
             } else {
-                ctx.fillRect(x, y, cell, cell);
+                c2.fillRect(x, y, cell, cell);
             }
             return;
         }
 
-        ctx.fillStyle = p.hex;
+        c2.fillStyle = p.hex;
         if (cell >= 10) {
-            ctx.beginPath();
+            c2.beginPath();
             const rad = Math.min(cell * 0.22, 4);
-            roundRect(ctx, x + 0.5, y + 0.5, cell - 1, cell - 1, rad);
-            ctx.fill();
+            roundRect(c2, x + 0.5, y + 0.5, cell - 1, cell - 1, rad);
+            c2.fill();
         } else {
-            ctx.fillRect(x, y, cell, cell);
+            c2.fillRect(x, y, cell, cell);
         }
 
         if (drawCodes) {
-            ctx.fillStyle = luminance(p.hex) > 0.62 ? 'rgba(0,0,0,.68)' : 'rgba(255,255,255,.82)';
-            ctx.font = `600 ${Math.floor(cell * 0.34)}px system-ui, -apple-system, sans-serif`;
-            ctx.fillText(code, x + cell / 2, y + cell / 2 + 0.5);
+            c2.fillStyle = luminance(p.hex) > 0.62 ? 'rgba(0,0,0,.68)' : 'rgba(255,255,255,.82)';
+            c2.font = `600 ${Math.floor(cell * 0.34)}px system-ui, -apple-system, sans-serif`;
+            c2.fillText(code, x + cell / 2, y + cell / 2 + 0.5);
         }
     }
 
@@ -950,7 +984,145 @@
         ctx.restore();
     }
 
+    /* ---------------------------------------------------------
+     * 非当前区域：位图快照（"蒙版"）+ 暗化
+     * ---------------------------------------------------------
+     * 多区域时不能只画当前区域——那样找区域只能记颜色/编号/一个个点开。
+     * 但每帧把所有区域的豆子重画一遍会卡（29×29 就有 841 颗，
+     * 十个区域近万颗，每颗圆角矩形 + 可能带色号文字）。
+     *
+     * 所以非当前区域一律渲染进离屏 canvas（快照），主画布只贴图：
+     *   - 平移完全不重建；
+     *   - 缓存分辨率把 cell 量化成整数像素、允许差 1px 拉伸复用，
+     *     缩放时也不会每帧重建；
+     *   - 每帧最多重建 REGION_CACHE_BUDGET 个，剩下的先拉伸旧图顶着；
+     *   - 区域大到超过像素预算就降级成"按颜色合并色块"（同色连续段一次 fillRect），
+     *     暗化后本来就只看轮廓，够用。
+     * 暗化：贴完叠一层薄暗罩，当前区域才会跳出来。
+     */
+    const regionCache = new Map();
+    const REGION_CACHE_BUDGET = 3;
+    const REGION_CACHE_MAX_PX = 2.4e6;   // 单区域快照像素上限（约 9.6MB）
+    let regionCacheBudget = REGION_CACHE_BUDGET;
+
+    function invalidateRegionCache() {
+        for (const r of W.regions) r._cacheDirty = true;
+    }
+
+    function pruneRegionCache() {
+        const live = new Set(W.regions.map(r => r.id));
+        for (const id of Array.from(regionCache.keys())) {
+            if (!live.has(id)) regionCache.delete(id);
+        }
+    }
+
+    /* 把整个区域画进一个离屏上下文（局部坐标：0..w*c） */
+    function paintRegionBitmap(g, r, c) {
+        const pxW = r.w * c, pxH = r.h * c;
+        g.setTransform(1, 0, 0, 1, 0, 0);
+        g.clearRect(0, 0, pxW, pxH);
+        g.fillStyle = state.emptyColor || '#ffffff';
+        g.fillRect(0, 0, pxW, pxH);
+
+        const drawCodes = c >= 20;
+        g.textAlign = 'center';
+        g.textBaseline = 'middle';
+        for (let y = 0; y < r.h; y++) {
+            const row = y * r.w;
+            for (let x = 0; x < r.w; x++) {
+                const code = r.cells[row + x];
+                if (!code) continue;
+                drawBead(x * c, y * c, c, code, drawCodes, g, true);
+            }
+        }
+    }
+
+    function regionCacheCanvas(r, cell) {
+        const q = clamp(Math.round(cell), 5, 40);
+        const pxW = q * r.w, pxH = q * r.h;
+        if (pxW * pxH > REGION_CACHE_MAX_PX) return null;      // 太大 → 调用方走色块降级
+
+        const hit = regionCache.get(r.id);
+        const same = !!hit && hit.w === r.w && hit.h === r.h;
+        // 分辨率差 1px 以内直接拉伸复用：缩放时就不会每帧全量重建
+        if (same && !r._cacheDirty && Math.abs(hit.q - q) <= 1) return hit.cv;
+        if (same && regionCacheBudget <= 0) return hit.cv;     // 本帧预算用完，旧图先顶着
+
+        regionCacheBudget--;
+        const cv = same ? hit.cv : document.createElement('canvas');
+        if (cv.width !== pxW || cv.height !== pxH) { cv.width = pxW; cv.height = pxH; }
+        paintRegionBitmap(cv.getContext('2d'), r, q);
+        regionCache.set(r.id, { cv, q, w: r.w, h: r.h });
+        r._cacheDirty = false;
+        return cv;
+    }
+
+    /* 降级画法：同一行里颜色相同的连续格合并成一个矩形 */
+    function drawRegionBlocks(r, px, py, cell) {
+        ctx.globalAlpha = .88;
+        for (let y = 0; y < r.h; y++) {
+            const row = y * r.w;
+            let x = 0;
+            while (x < r.w) {
+                const code = r.cells[row + x];
+                if (!code) { x++; continue; }
+                let x2 = x + 1;
+                while (x2 < r.w && r.cells[row + x2] === code) x2++;
+                const p = PAL_MAP.get(code);
+                if (p) {
+                    ctx.fillStyle = p.hex;
+                    ctx.fillRect(px + x * cell, py + y * cell, (x2 - x) * cell, cell);
+                }
+                x = x2;
+            }
+        }
+        ctx.globalAlpha = 1;
+    }
+
+    /**
+     * 画所有非当前区域：底板 → 内容（快照贴图）→ 暗罩 → 边框。
+     * 不画格线/坐标：暗化后那些只是噪音，还省掉一遍整网格描边。
+     */
+    function drawOtherRegions(cell, vw, vh) {
+        if (W.regions.length <= 1) return;
+        const emptyHex = state.emptyColor || '#ffffff';
+
+        for (const r of W.regions) {
+            if (r.id === D.id) continue;
+
+            const px = view.x + r.x * cell, py = view.y + r.y * cell;
+            const pw = r.w * cell, ph = r.h * cell;
+            if (px > vw || py > vh || px + pw < 0 || py + ph < 0) continue;   // 视口外跳过
+
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(px, py, pw, ph);
+            ctx.clip();
+
+            ctx.fillStyle = emptyHex;
+            ctx.fillRect(px, py, pw, ph);
+
+            const cv = regionCacheCanvas(r, cell);
+            if (cv) {
+                // 不做半透明贴图：深色豆子混了白底会"变亮"，跟"压暗"正好相反
+                ctx.drawImage(cv, px, py, pw, ph);
+            } else {
+                drawRegionBlocks(r, px, py, cell);
+            }
+
+            // 暗罩：不绘制的区域整体压暗一层，当前区域才会跳出来
+            ctx.fillStyle = 'rgba(20,22,26,.18)';
+            ctx.fillRect(px, py, pw, ph);
+            ctx.restore();
+
+            ctx.strokeStyle = 'rgba(20,22,26,.20)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(px + .5, py + .5, pw - 1, ph - 1);
+        }
+    }
+
     function draw() {
+        regionCacheBudget = REGION_CACHE_BUDGET;
         // 用 backing store 的尺寸而不是容器尺寸：侧栏/次面板做宽度动画时容器尺寸每帧都在变，
         // 这里跟着位图走，画面不会画到画布外面
         const W = canvas.width / dpr;
@@ -975,6 +1147,9 @@
         drawWorldGrid(W, H, cell);
         // 草稿（区域外的散画）：压在网格上面、区域底板下面
         drawDrafts(cell, W, H);
+
+        // 其它区域：暗化快照，一眼看到全貌又能分清"我在哪块"
+        drawOtherRegions(cell, W, H);
 
         // 画布投影 + 底板：底板颜色 = 空格底色
         const emptyHex = state.emptyColor || '#ffffff';
@@ -1278,15 +1453,17 @@
             ctx.fill();
         }
 
-        // 创建区域拖拽预览（虚线矩形）
+        // 创建区域拖拽预览：虚线矩形 + 居中大数字（实时宽高，方便判断该画多大）
         if (drag && drag.mode === 'regionDraw') {
             const cell = view.scale;
             const x0 = Math.min(drag.anchor.c, drag.cur.c);
             const y0 = Math.min(drag.anchor.r, drag.cur.r);
             const x1 = Math.max(drag.anchor.c, drag.cur.c) + 1;
             const y1 = Math.max(drag.anchor.r, drag.cur.r) + 1;
+            const lw = x1 - x0, lh = y1 - y0;
             const px = view.x + x0 * cell, py = view.y + y0 * cell;
-            const pw = (x1 - x0) * cell, ph = (y1 - y0) * cell;
+            const pw = lw * cell, ph = lh * cell;
+
             ctx.strokeStyle = 'rgba(108,76,241,.95)';
             ctx.fillStyle = 'rgba(108,76,241,.10)';
             ctx.lineWidth = 1.5;
@@ -1294,6 +1471,38 @@
             ctx.fillRect(px, py, pw, ph);
             ctx.strokeRect(px + .5, py + .5, pw - 1, ph - 1);
             ctx.setLineDash([]);
+
+            // 尺寸大字：拖动过程中实时跟手，松手前就能确认这是不是想要的 29×29
+            if (pw >= 70 && ph >= 50) {
+                // 字号按框宽推：'29 × 29' 的实测宽度约 3.8×字号，取 0.19 倍框宽稳稳落在框内
+                const fs = Math.round(clamp(Math.min(pw * .19, ph * .26), 16, 96));
+                const label = `${lw} × ${lh}`;
+                const cx = px + pw / 2;
+                const cy = py + ph / 2 - (fs >= 26 ? fs * .1 : 0);
+
+                ctx.save();
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.lineJoin = 'round';
+
+                ctx.font = `700 ${fs}px system-ui, -apple-system, sans-serif`;
+                ctx.lineWidth = Math.max(3, fs * .12);
+                ctx.strokeStyle = 'rgba(255,255,255,.96)';
+                ctx.strokeText(label, cx, cy);
+                ctx.fillStyle = 'rgba(84,55,216,.98)';
+                ctx.fillText(label, cx, cy);
+
+                if (fs >= 26) {
+                    const fs2 = Math.round(clamp(fs * .26, 11, 22));
+                    ctx.font = `600 ${fs2}px system-ui, -apple-system, sans-serif`;
+                    ctx.lineWidth = Math.max(2.5, fs2 * .42);
+                    ctx.strokeStyle = 'rgba(255,255,255,.92)';
+                    ctx.strokeText('格', cx, cy + fs * .8);
+                    ctx.fillStyle = 'rgba(84,55,216,.72)';
+                    ctx.fillText('格', cx, cy + fs * .8);
+                }
+                ctx.restore();
+            }
         }
 
         ctx.restore();
@@ -2499,6 +2708,9 @@
 
         history.index = i;
         state.select = null;
+        // 撤销/重写的是**所有区域**的 cells，非当前区域的快照一律作废
+        invalidateRegionCache();
+        pruneRegionCache();
         updateDocMeta();
         updateHistoryButtons();
         renderStats();
@@ -3580,6 +3792,17 @@
             return;
         }
 
+        // 点在其他区域里 → 直接切过去，不用先去找标签。
+        // 切完继续走原来的工具流程，这一笔就落在这块区域上（点哪块改哪块）。
+        if (!state.cmd) {
+            const hit = regionAt(c, r);
+            if (hit && hit.id !== D.id) {
+                switchToRegion(hit);
+                const nm = hit.name && hit.name !== '未命名区域' ? hit.name : '区域 ' + hit.id;
+                toast('切到「' + nm + '」');
+            }
+        }
+
         // 无选中颜色时，绘画类工具先提示
         if ((state.tool === 'brush' || state.tool === 'fill' || state.tool === 'outline') && !state.color) {
             toast('先在右边选一个颜色');
@@ -3778,13 +4001,13 @@
         if (mode === 'pan' && !drag.moved && !state.tool && !state.cmd) {
             const p = e ? toCell(e.clientX, e.clientY) : { c: 0, r: 0 };
             const hit = regionAt(p.c, p.r);
-            if (hit && hit.id !== D.id) { bindRegion(hit); markDirty(); requestRender(); }
+            if (hit) switchToRegion(hit);
         }
 
         // 拖拽区域标签：未移动＝点击切换；移动过＝落点防重叠后提交
         if (mode === 'label') {
             if (!drag.moved) {
-                if (drag.region.id !== D.id) { bindRegion(drag.region); markDirty(); }
+                switchToRegion(drag.region);
             } else {
                 resolveRegionOverlap(drag.region);
                 syncRegionMeta();
@@ -6129,7 +6352,9 @@
                 regionLabelRect, currentRegion, openRegionMenu, closeRegionMenu,
                 undo, redo, history, snapshotRegionDelete,
                 setCmd: (id) => setCmd(id), setTool: (id) => setTool(id),
-                switchRegion: (r) => { if (r) { bindRegion(r); markDirty(); requestRender(); } },
+                switchRegion: (r) => switchToRegion(r), switchToRegion,
+                regionCacheInfo: () => ({ size: regionCache.size, ids: Array.from(regionCache.keys()) }),
+                drawNow: () => draw(),
                 // 持久化
                 serializeWorld, restoreWorld, markDirty, flushSave, saveWorldNow, cancelPendingSave,
                 store: window.WorldStore,
