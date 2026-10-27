@@ -724,6 +724,7 @@
 
     /** 把当前世界拍成一份可结构化克隆的普通对象。 */
     function serializeWorld() {
+        healCurrentRegionCells();
         return {
             v: 1,
             nextId: W.nextId,
@@ -2973,11 +2974,27 @@
         return null;
     }
 
+    /**
+     * D.grid 与当前区域的 region.cells 正常情况下是**同一个数组**。
+     * 只有一条路会把它们分开：某处换了新数组（改画布尺寸 / 裁剪 / 批量重建）
+     * 却忘了 syncRegionMeta。分开之后一切照常跑、不报任何错，
+     * 只有快照和存档存的是旧图 —— 表现为「撤销回到一张跟屏幕无关的画」。
+     * 这里做一次兜底对齐：D 是当前区域的权威，先按它同步，再存快照。
+     */
+    function healCurrentRegionCells() {
+        const cur = regionById(D.id);
+        if (cur && (cur.cells !== D.grid || cur.w !== D.cols || cur.h !== D.rows)) {
+            if (location.search.includes('debug')) console.warn('D.grid 与 region.cells 不同步，已按 D 对齐');
+            syncRegionMeta();
+        }
+    }
+
     /* 统一历史栈：格子编辑 + 区域结构变更（增/删/移动）进同一栈。
        每个条目同时记录：① 当前区域的格子（cell 层）② 所有区域的几何（region 层）
        ③ 当前区域 id。撤销时两层一起回滚。
        只有"删除区域"才额外存 cells 快照（规则：仅删区域存 cells）。 */
     function snapshot(label) {
+        healCurrentRegionCells();
         history.stack = history.stack.slice(0, history.index + 1);
         const allCells = {};
         for (const r of W.regions) allCells[r.id] = r.cells.slice();
