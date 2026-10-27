@@ -620,12 +620,23 @@
         </aside>
 
 
-        <!-- 图纸参数抽屉 -->
-        <section class="ed-drawer" id="drawer" hidden>
+        <!-- 下载图纸弹窗：左边多选图纸，右边导出配置 -->
+        <section class="ed-dlmodal" id="drawer" hidden>
             <header class="dr-head">
-                <h2 id="drawerTitle">下载拼豆图纸</h2>
+                <h2 id="drawerTitle">下载图纸</h2>
                 <button class="dr-close" id="drawerClose" type="button" aria-label="关闭">✕</button>
             </header>
+
+            <div class="dl-main">
+                <div class="dl-pick">
+                    <div class="dl-pick-head">
+                        <span>选择图纸</span>
+                        <em id="dlCount">—</em>
+                        <button class="dl-mini" id="dlAll" type="button">全选</button>
+                        <button class="dl-mini" id="dlNone" type="button">清空</button>
+                    </div>
+                    <div class="dl-list" id="dlList"></div>
+                </div>
 
             <div class="dr-body">
                 <div class="dr-group">
@@ -721,10 +732,11 @@
                     </label>
                 </div>
             </div>
+            </div>
 
             <footer class="dr-foot">
                 <button class="btn" id="drawerCancel" type="button">取消</button>
-                <button class="btn btn-primary" id="drawerConfirm" type="button">生成并下载</button>
+                <button class="btn btn-primary" id="drawerConfirm" type="button">下载</button>
             </footer>
         </section>
 

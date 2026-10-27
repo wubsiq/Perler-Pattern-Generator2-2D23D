@@ -6577,20 +6577,170 @@
     const historySheet = $('historySheet');
     const infoSheet = $('infoSheet');
 
-    function openDrawer(kind) {
-        $('drawerTitle').textContent = kind === 'iron' ? '预览成品效果' : '下载拼豆图纸';
+    /* =========================================================
+     * 下载图纸（弹窗）：左边多选图纸，右边导出配置
+     *
+     * 以前只能下载「当前区域」一张，做配件时得逐个切过去再下。
+     * 现在勾几张就按同一套配置依次生成，文件名带区域编号，不会互相覆盖。
+     * ========================================================= */
+
+    const dl = { sel: new Set() };
+
+    function openDownload() {
+        dl.sel.clear();
+        const cur = regionById(D.id);
+        if (cur && cur.cells.some(Boolean)) dl.sel.add(cur.id);   // 默认勾当前区域
+        renderDlList();
+
         drawer.hidden = false;
         scrim.hidden = false;
-        $('drawerConfirm').textContent = kind === 'iron' ? '生成预览' : '生成并下载';
-        drawer.dataset.kind = kind;
-
         // 画布上的空格底色带进导出设置，所见即所得
         $('optEmptyColor').value = state.emptyColor || '#ffffff';
+        syncDlFoot();
     }
 
     function closeDrawer() {
         drawer.hidden = true;
         scrim.hidden = true;
+    }
+
+    /** 区域缩略图：直接复用烘焙（带豆缝的），外面再垫一层白底 */
+    function regionThumb(r, maxPx) {
+        const cellPx = clamp(Math.floor(maxPx / Math.max(r.w, r.h)), 2, 10);
+        let src;
+        try {
+            src = bakeRegionTexture(r, cellPx);
+        } catch (e) {
+            return null;
+        }
+        const cv = document.createElement('canvas');
+        cv.width = Math.max(1, src.width);
+        cv.height = Math.max(1, src.height);
+        const g = cv.getContext('2d');
+        g.drawImage(src, 0, 0);
+        return cv;
+    }
+
+    function renderDlList() {
+        const list = $('dlList');
+        if (!list) return;
+        list.textContent = '';
+
+        W.regions.forEach((r, i) => {
+            const filled = r.cells.reduce((n, c) => n + (c ? 1 : 0), 0);
+            const card = document.createElement('button');
+            card.type = 'button';
+            card.className = 'dl-card' + (dl.sel.has(r.id) ? ' is-on' : '') + (filled ? '' : ' is-empty');
+            card.dataset.id = String(r.id);
+
+            const thumb = document.createElement('span');
+            thumb.className = 'dl-thumb';
+            if (filled) {
+                const cv = regionThumb(r, 200);
+                if (cv) thumb.appendChild(cv);
+            } else {
+                thumb.classList.add('is-empty');
+                thumb.textContent = '空画布';
+            }
+
+            const name = document.createElement('span');
+            name.className = 'dl-name';
+            const no = document.createElement('i');
+            no.textContent = 'No' + r.id;
+            const nm = document.createElement('span');
+            nm.textContent = r.name || ('区域 ' + (i + 1));
+            name.appendChild(no);
+            name.appendChild(nm);
+
+            const sub = document.createElement('span');
+            sub.className = 'dl-sub';
+            sub.textContent = `${r.w}×${r.h} · ${filled} 颗`;
+
+            const tick = document.createElement('span');
+            tick.className = 'dl-tick';
+            tick.textContent = '✓';
+
+            card.appendChild(thumb);
+            card.appendChild(name);
+            card.appendChild(sub);
+            card.appendChild(tick);
+
+            if (!filled) {
+                card.disabled = true;
+                card.title = '这个区域还是空的';
+            } else {
+                card.addEventListener('click', () => {
+                    if (dl.sel.has(r.id)) dl.sel.delete(r.id);
+                    else dl.sel.add(r.id);
+                    card.classList.toggle('is-on', dl.sel.has(r.id));
+                    syncDlFoot();
+                });
+            }
+            list.appendChild(card);
+        });
+        syncDlFoot();
+    }
+
+    function syncDlFoot() {
+        const total = W.regions.filter(r => r.cells.some(Boolean)).length;
+        const n = dl.sel.size;
+        const cnt = $('dlCount');
+        if (cnt) cnt.textContent = `已选 ${n} / ${total}`;
+        const btn = $('drawerConfirm');
+        if (btn) {
+            btn.disabled = n === 0;
+            btn.textContent = n > 1 ? `下载 ${n} 张` : '下载';
+        }
+    }
+
+    function dlSelectAll(on) {
+        dl.sel.clear();
+        if (on) W.regions.forEach(r => { if (r.cells.some(Boolean)) dl.sel.add(r.id); });
+        document.querySelectorAll('#dlList .dl-card').forEach(card => {
+            card.classList.toggle('is-on', dl.sel.has(Number(card.dataset.id)));
+        });
+        syncDlFoot();
+    }
+
+    /** 临时把 D 绑到某个区域跑一段代码，跑完绑回来（渲染导出都读 D） */
+    function withRegion(r, fn) {
+        const prev = regionById(D.id);
+        bindRegion(r);
+        let out;
+        try { out = fn(); } finally { if (prev) bindRegion(prev); }
+        return out;
+    }
+
+    async function downloadSelected() {
+        readOptions();
+        const regions = W.regions.filter(r => dl.sel.has(r.id));
+        if (!regions.length) { toast('先勾选要下载的图纸'); return; }
+
+        const btn = $('drawerConfirm');
+        btn.disabled = true;
+        const d = new Date();
+        const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+
+        let n = 0;
+        for (let i = 0; i < regions.length; i++) {
+            const r = regions[i];
+            btn.textContent = `生成中 ${i + 1}/${regions.length}`;
+            const cv = withRegion(r, () => renderChart(OPT));
+            const blob = cv && await new Promise(res => cv.toBlob(res, 'image/png'));
+            if (blob) {
+                const safe = (r.name || ('区域' + r.id)).replace(/[\\/:*?"<>|]/g, '_');
+                download(blob, `${safe}_No${r.id}_${r.w}x${r.h}_${stamp}.png`);
+                n++;
+            }
+            // 连续触发多个下载浏览器会拦，拉开一点更稳
+            if (i < regions.length - 1) await new Promise(res => setTimeout(res, 260));
+        }
+
+        btn.disabled = false;
+        btn.textContent = '下载';
+        closeDrawer();
+        requestRender();
+        toast(n > 1 ? `已下载 ${n} 张图纸` : '图纸已下载');
     }
 
     function closeSheets() {
@@ -6601,7 +6751,9 @@
         soClose();
     }
 
-    $('btnDownload').addEventListener('click', () => openDrawer('download'));
+    $('btnDownload').addEventListener('click', openDownload);
+    $('dlAll').addEventListener('click', () => dlSelectAll(true));
+    $('dlNone').addEventListener('click', () => dlSelectAll(false));
     /* =========================================================
      * 3D 视图（多实例）
      *
@@ -6845,6 +6997,10 @@
 
             // 2D 期间一直在画，贴图必然是旧的 → 进来先全量重烘
             sync3dInstances(true);
+            // 上次退出时如果停在"轴向视图"（俯视/正视，正交），进来先回透视斜视：
+            // 否则用户切回 3D 看到的是上一轮的平面图，还以为 3D 坏了
+            if (ed.ortho) ed.setPerspectiveView();
+
             // 面板占掉右边一条，画布宽度会变；等布局落定再量尺寸，
             // 否则 frameAll 用的是窄面板之前的宽高比，一进来就偏
             ed.resize();
@@ -7126,21 +7282,7 @@
     $('smartCancel').addEventListener('click', closeSheets);
     scrim.addEventListener('click', () => { closeDrawer(); closeSheets(); });
 
-    $('drawerConfirm').addEventListener('click', () => {
-        readOptions();
-        const kind = drawer.dataset.kind;
-
-        const c = renderChart(OPT);
-        c.toBlob(blob => {
-            if (!blob) { toast('生成失败'); return; }
-            const safe = (D.name || '拼豆图纸').replace(/[\\/:*?"<>|]/g, '_');
-            const d = new Date();
-            const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
-            download(blob, `${safe}_${D.cols}x${D.rows}_${stamp}.png`);
-            toast('图纸已下载');
-            closeDrawer();
-        }, 'image/png');
-    });
+    $('drawerConfirm').addEventListener('click', () => { downloadSelected(); });
 
     function readOptions() {
         const bead = clamp(Number($('optBeadNum').value) || 30, 10, 60);

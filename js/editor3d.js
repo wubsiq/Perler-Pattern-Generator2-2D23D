@@ -37,11 +37,13 @@
 (function () {
     'use strict';
 
-    var THICK = 1.1;            // 板厚（格）
+    var THICK = 1;              // 板厚：跟一格一样 = 1 单位（真拼豆也是 5mm×5mm）
     var MAX_TEX = 2048;         // 单边纹理上限，超了就降烘焙分辨率
     var FLOATS = 12;            // pos(3) normal(3) uv(2) color(3) texFlag(1)
     var STRIDE = FLOATS * 4;    // 字节步长
     var HALF_PI = Math.PI / 2;
+    var FOV = 46 * Math.PI / 180;    // 34° 太窄，远近几乎一样大 → 看着像正交；46° 才有立体感
+    var DEF_YAW = -0.62, DEF_PITCH = 0.52;
 
     /* ============================ 矩阵（列主序） ============================ */
 
@@ -538,16 +540,24 @@
         gl.bindBuffer(gl.ARRAY_BUFFER, this.boxBuf);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(buildUnitBoxLines()), gl.STATIC_DRAW);
 
+        // 地面网格：给视觉一个"地面"，否则几块板悬在空里怎么看都像平面图
+        this.gridBuf = gl.createBuffer();
+        this.gridMajorBuf = gl.createBuffer();
+        this.gridCount = 0;
+        this.gridMajorCount = 0;
+        this.showGrid = true;       // 像素级测试要临时关掉（地面会被当成"没有几何"）
+
         this.items = new Map();     // id -> { id, w, h, buf, tex, hasTex, local, cx, cy, shape, ... }
+        this._buildGrid();          // 必须在 items 建好之后（网格范围按实例算）
         this.hoverId = null;
         this.selectedId = null;
 
         // 相机：绕 target 的球面机位，z 朝上。默认斜上方俯视，能同时看见顶面和一点厚度
-        this.yaw = -0.42;
-        this.pitch = 0.62;
+        this.yaw = DEF_YAW;
+        this.pitch = DEF_PITCH;
         this.dist = 120;
         this.target = [0, 0, 0];
-        this.fov = 34 * Math.PI / 180;
+        this.fov = FOV;
         this.ortho = false;         // 轴向视图（平视/俯视）切正交，边才是真的平行
 
         // 旋转灵敏度：整屏高度拖过去大约转 155°。
@@ -711,8 +721,70 @@
             var fitH = span / (2 * Math.tan(this.fov / 2));
             var fitW = span / (2 * Math.tan(this.fov / 2) * Math.min(1, aspect));
             this.dist = Math.max(fitH, fitW) * 1.14 + 8;
+            this._buildGrid();
             this._dirty = true;
             this.render();
+        },
+
+        /**
+         * 地面网格（z≈0）：间距 5 格（正好是 2D 画布的大格），每 25 格加深一档。
+         * 范围按场景外接矩形算 —— 固定大小的话，缩远了会糊成一片摩尔纹，
+         * 缩近了又只剩两条线。
+         */
+        _buildGrid() {
+            var gl = this.gl;
+            var items = Array.from(this.items.values());
+            var x0 = -20, x1 = 20, y0 = -20, y1 = 20;
+            if (items.length) {
+                x0 = Infinity; x1 = -Infinity; y0 = Infinity; y1 = -Infinity;
+                items.forEach(it => {
+                    var p = it.local && it.local.pos ? it.local.pos : [0, 0, 0];
+                    x0 = Math.min(x0, it.cx + p[0] - it.w / 2); x1 = Math.max(x1, it.cx + p[0] + it.w / 2);
+                    y0 = Math.min(y0, it.cy + p[1] - it.h / 2); y1 = Math.max(y1, it.cy + p[1] + it.h / 2);
+                });
+            }
+            var STEP = 5, MAJOR = 25, PAD = 22, Z = -0.02;
+            var gx0 = Math.floor((x0 - PAD) / MAJOR) * MAJOR, gx1 = Math.ceil((x1 + PAD) / MAJOR) * MAJOR;
+            var gy0 = Math.floor((y0 - PAD) / MAJOR) * MAJOR, gy1 = Math.ceil((y1 + PAD) / MAJOR) * MAJOR;
+
+            var minor = [], major = [];
+            function seg(arr, ax, ay, bx, by) {
+                arr.push(ax, ay, Z, 0, 0, 1, 0, 0, 1, 1, 1, 0);
+                arr.push(bx, by, Z, 0, 0, 1, 0, 0, 1, 1, 1, 0);
+            }
+            for (var gx = gx0; gx <= gx1; gx += STEP) seg(gx % MAJOR === 0 ? major : minor, gx, gy0, gx, gy1);
+            for (var gy = gy0; gy <= gy1; gy += STEP) seg(gy % MAJOR === 0 ? major : minor, gx0, gy, gx1, gy);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.gridBuf);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(minor), gl.STATIC_DRAW);
+            this.gridCount = minor.length / FLOATS;
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.gridMajorBuf);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(major), gl.STATIC_DRAW);
+            this.gridMajorCount = major.length / FLOATS;
+        },
+
+        /** 画地面网格（纯色线，不参与选中/悬停） */
+        _drawGrid() {
+            if (!this.showGrid) return;
+            if (!this.gridCount && !this.gridMajorCount) return;
+            var gl = this.gl, L = this.loc;
+            gl.uniformMatrix4fv(L.uModel, false, identity());
+            gl.uniformMatrix3fv(L.uNormalMat, false, new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]));
+            gl.uniform1f(L.uHover, 0.0);
+            gl.uniform1f(L.uHasTex, 0.0);
+            gl.uniform1f(L.uFlat, 1.0);
+            if (this.gridCount) {
+                gl.uniform3f(L.uColor, 0.944, 0.949, 0.957);
+                this._bindAttribs(this.gridBuf);
+                gl.drawArrays(gl.LINES, 0, this.gridCount);
+            }
+            if (this.gridMajorCount) {
+                gl.uniform3f(L.uColor, 0.898, 0.906, 0.918);
+                this._bindAttribs(this.gridMajorBuf);
+                gl.drawArrays(gl.LINES, 0, this.gridMajorCount);
+            }
+            gl.uniform1f(L.uFlat, 0.0);
+            gl.uniform3f(L.uColor, 1, 1, 1);
         },
 
         focusItem(id) {
@@ -727,8 +799,8 @@
         },
 
         resetCamera() {
-            this.yaw = -0.42;
-            this.pitch = 0.62;
+            this.yaw = DEF_YAW;
+            this.pitch = DEF_PITCH;
             this.ortho = false;
             this.frameAll();
         },
@@ -745,8 +817,8 @@
 
         /** 回透视斜视（Blender 里点小方块回到透视视角） */
         setPerspectiveView() {
-            this.yaw = -0.42;
-            this.pitch = 0.62;
+            this.yaw = DEF_YAW;
+            this.pitch = DEF_PITCH;
             this.ortho = false;
             this._dirty = true;
             this.render();
@@ -945,9 +1017,12 @@
                 if (mode === 'orbit') {
                     // 拖拽量按视口高度归一：小窗口不再"一动就飞"。
                     // 一旦开始拖，轴向视图自动退回自由视角（正交保留，别再切线）
+                    // 横向要和纵向同一套「抓取」直觉：往右拖 = 把物体往右拧。
+                    // 相机绕的是物体，所以 yaw 得**减**（以前写加号，横竖两个方向手感是反的，
+                    // 用户说"还是怪"主要就是它）
                     var k = self._rotPerPx();
-                    self.yaw += dx * k;
-                    self.pitch = Math.max(0.02, Math.min(1.52, self.pitch + dy * k));
+                    self.yaw -= dx * k;
+                    self.pitch = Math.max(0.06, Math.min(1.52, self.pitch + dy * k));
                     self._dirty = true;
                 } else {
                     self._panBy(dx, dy);
@@ -1211,6 +1286,8 @@
             this.clear();
             var gl = this.gl;
             gl.deleteBuffer(this.boxBuf);
+            gl.deleteBuffer(this.gridBuf);
+            gl.deleteBuffer(this.gridMajorBuf);
             gl.deleteProgram(this.prog);
         },
 
@@ -1261,6 +1338,9 @@
             var self = this;
             gl.uniform1f(L.uFlat, 0.0);
             gl.uniform3f(L.uColor, 1, 1, 1);
+
+            // 地面先画（在板子下面，被板子的深度正常遮住）
+            this._drawGrid();
 
             this.items.forEach(function (it) {
                 var model = it.model || self._modelOf(it);
