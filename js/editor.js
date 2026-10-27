@@ -4701,6 +4701,28 @@
                 select3d(null);
                 return;
             }
+            // 视图：数字键盘跟 Blender 一致 —— 1 正视 / 3 右视 / 7 俯视，
+            // 按住 Ctrl 是反方向，5 切「正交 ↔ 透视」，0 复位机位
+            if (e.code && e.code.indexOf('Numpad') === 0) {
+                const ax = { Numpad1: 'y', Numpad3: 'x', Numpad7: 'z' }[e.code];
+                if (ax && view3d.inst) {
+                    e.preventDefault();
+                    view3d.inst.setAxisView((e.ctrlKey ? '-' : '') + ax);
+                    return;
+                }
+                if (e.code === 'Numpad5' && view3d.inst) {
+                    e.preventDefault();
+                    view3d.inst.ortho = !view3d.inst.ortho;
+                    view3d.inst._dirty = true;
+                    view3d.inst.render();
+                    return;
+                }
+                if (e.code === 'Numpad0' && view3d.inst) {
+                    e.preventDefault();
+                    view3d.inst.resetCamera();
+                    return;
+                }
+            }
             // G = Blender 那样抓着板走（组装配件最顺手的一条）
             if (kk === 'g') { e.preventDefault(); beginGrab3d(); return; }
             if (e.key === 'ArrowLeft') { e.preventDefault(); nudge3d(0, -step); return; }
@@ -7669,12 +7691,17 @@
                 gizmoInfo: () => {
                     const ed = view3d.inst;
                     if (!ed) return null;
+                    const c = ed._gizmoCenter();
                     return {
                         present: !!$('axis3d'),
                         ortho: !!ed.ortho,
                         axis: ed.axisView(),
-                        axes: ed._gizmoAxes().map(a => ({ key: a.key, x: a.x, y: a.y })),
-                        hot: ed._gizmoHot || null
+                        center: { x: c.cx, y: c.cy, R: c.R, w: c.w, h: c.h },
+                        axes: ed._gizmoAxes().map(a => ({
+                            key: a.key, x: a.x, y: a.y, len: a.len, depth: a.depth
+                        })),
+                        hot: ed._gizmoHot || null,
+                        dragging: !!ed._gizmoDrag
                     };
                 },
                 instInfo: () => ({

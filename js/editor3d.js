@@ -44,6 +44,14 @@
     var HALF_PI = Math.PI / 2;
     var FOV = 46 * Math.PI / 180;    // 34° 太窄，远近几乎一样大 → 看着像正交；46° 才有立体感
     var DEF_YAW = -0.62, DEF_PITCH = 0.52;
+    var PITCH_MIN = 0.05, PITCH_MAX = 1.52;
+    var DIST_MIN = 3, DIST_MAX = 4000;
+    // 滚轮：一格（deltaY=100）约 1.14 倍；往**前**滚 = 拉近
+    var ZOOM_PER_PX = Math.log(1.14) / 100;
+    // 坐标盘底部那行字：正对着哪个轴 + 从哪一侧看
+    var MODE_LABEL = {
+        x: '右视', '-x': '左视', y: '正视', '-y': '背视', z: '俯视', '-z': '仰视'
+    };
 
     /* ============================ 矩阵（列主序） ============================ */
 
@@ -560,13 +568,17 @@
         this.fov = FOV;
         this.ortho = false;         // 轴向视图（平视/俯视）切正交，边才是真的平行
 
-        // 旋转灵敏度：整屏高度拖过去大约转 155°。
-        // 以前是固定 0.008 rad/px（同样一屏转 400°+），这就是「太滑」的主因。
-        this.rotSpan = 2.7;     // 弧度 / 视口高度
+        // 旋转灵敏度：横**按视口宽**、竖**按视口高**分开归一。
+        // 以前两个都用高度，宽屏上横拖满屏要转 3 圈多 —— 这就是「滑」的来源。
+        // 现在：横拖满屏约 206°、竖拖满屏约 86°，跟 Blender 的轨道手感接近。
+        this.rotSpanX = 3.6;    // 弧度 / 视口宽
+        this.rotSpanY = 1.5;    // 弧度 / 视口高（竖的可转范围本来就有限，慢一点才不撞头）
 
         this._raf = 0;
         this._last = 0;
         this._dirty = true;
+        this._gizmoHot = null;      // 悬停的轴 key（画高亮）
+        this._gizmoDrag = false;    // 正在坐标盘上拖（画盘面按下态）
         this.onPick = null;
         this.onCamera = null;       // 相机变了通知外面（坐标轴要重画）
 
@@ -805,12 +817,17 @@
             this.frameAll();
         },
 
-        /** 轴向视图：正的 X / 正面（-Y）/ 俯视（+Z）。这三个方向都不会把图纸镜像翻转。 */
+        /**
+         * 轴向视图：从指定方向正对着看，并转正交（边真正平行，像一张平面图）。
+         * 六个方向都能点：x / -x / y / -y / z / -z。
+         */
         setAxisView(axis) {
-            if (axis === 'x') { this.yaw = HALF_PI; this.pitch = 0; }
-            else if (axis === 'y') { this.yaw = 0; this.pitch = 0; }
-            else { this.yaw = 0; this.pitch = HALF_PI; }
-            this.ortho = true;      // 平视 = 正交，边才是真的平行，像一张平面图
+            const neg = String(axis).charAt(0) === '-';
+            const a = String(axis).replace('-', '');
+            if (a === 'x') { this.yaw = neg ? -HALF_PI : HALF_PI; this.pitch = 0; }
+            else if (a === 'y') { this.yaw = neg ? Math.PI : 0; this.pitch = 0; }
+            else { this.yaw = 0; this.pitch = neg ? -HALF_PI : HALF_PI; }
+            this.ortho = true;
             this._dirty = true;
             this.render();
         },
@@ -926,16 +943,26 @@
             if (this.onGrabMove) this.onGrabMove([wx - base[0], wy - base[1], g.start[2]]);
         },
 
+        /**
+         * 当前正对着哪根轴（正交时才算）。带负号：'-x' 表示从 -X 一侧看过去。
+         * 六个方向都认，坐标轴 gizmo 上六个球各对应一个。
+         */
         axisView() {
             if (!this.ortho) return null;
-            if (Math.abs(this.pitch - HALF_PI) < 1e-3) return 'z';
-            if (Math.abs(this.pitch) < 1e-3) return Math.abs(this.yaw) < 1e-3 ? 'y' : 'x';
+            const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
+            if (Math.abs(sp) > 0.999) return sp > 0 ? 'z' : '-z';
+            const sx = cp * Math.sin(this.yaw), sy = -cp * Math.cos(this.yaw);
+            if (Math.abs(sx) > 0.999) return sx > 0 ? 'x' : '-x';
+            if (Math.abs(sy) > 0.999) return sy > 0 ? '-y' : 'y';
             return null;
         },
 
         _up() {
-            // 俯视时 (0,0,1) 跟视线平行，mLookAt 会退化成 0 长度 → 换 +y 当屏幕上方
-            return Math.abs(this.pitch) > 1.5 ? [0, 1, 0] : [0, 0, 1];
+            // 俯视/仰视时 (0,0,1) 跟视线平行，mLookAt 会退化成 0 长度 → 换 ±y 当屏幕上方。
+            // 俯视用 +y（第 0 行在上，跟 2D 一致），仰视用 -y（x 才朝右，不镜像）。
+            if (this.pitch > 1.5) return [0, 1, 0];
+            if (this.pitch < -1.5) return [0, -1, 0];
+            return [0, 0, 1];
         },
 
         /** 相机基向量：视线/右/上。拾取、坐标轴、平移都用这一套，别各推各的。 */
@@ -964,9 +991,53 @@
 
         /* ---------------- 事件 ---------------- */
 
-        /** 一转一像素多少弧度：按视口高度归一，换屏幕尺寸手感不变 */
-        _rotPerPx() {
-            return this.rotSpan / Math.max(320, this.canvas.clientHeight || 800);
+        /** 横向一像素多少弧度：按视口**宽**归一（宽屏不会一拖就转好几圈） */
+        _rotPerPxX() {
+            return this.rotSpanX / Math.max(360, this.canvas.clientWidth || 1000);
+        },
+
+        /** 纵向一像素多少弧度：按视口**高**归一 */
+        _rotPerPxY() {
+            return this.rotSpanY / Math.max(260, this.canvas.clientHeight || 800);
+        },
+
+        /**
+         * 轨道旋转 —— 主画布拖动和坐标轴拖动**共用这一个**，手感必须一致。
+         * 反正没人希望在两个地方拖出两种转速。
+         */
+        _orbitBy(dx, dy) {
+            // 横竖同一套「抓取」直觉：往右拖 = 把物体往右拧，往下拖 = 看到更多顶面。
+            // 相机绕的是物体，所以 yaw 得**减**。
+            this.yaw -= dx * this._rotPerPxX();
+            this.pitch = Math.max(PITCH_MIN, Math.min(PITCH_MAX, this.pitch + dy * this._rotPerPxY()));
+            this._dirty = true;
+        },
+
+        /**
+         * 以鼠标位置为焦点缩放：光标底下那块内容缩放前后**不动**（Blender 也是这样）。
+         * 只改 dist 不挪 target 的话，想凑近看某个角的配件得"缩完再平移两下"，特别别扭。
+         */
+        _zoomTo(k, clientX, clientY) {
+            var nd = Math.max(DIST_MIN, Math.min(DIST_MAX, this.dist * k));
+            var kk = nd / this.dist;
+            if (!isFinite(kk) || kk <= 0) return;
+            if (Math.abs(kk - 1) < 1e-6) { this.dist = nd; return; }
+
+            var r = this.canvas.getBoundingClientRect();
+            var nx = ((clientX - r.left) / (r.width || 1)) * 2 - 1;
+            var ny = 1 - ((clientY - r.top) / (r.height || 1)) * 2;
+            var b = this._basis();
+            var th = Math.tan(this.fov / 2);
+            var aspect = (this.canvas.width || 1) / (this.canvas.height || 1);
+            var hh = this.dist * th, hw = hh * aspect;
+
+            // 光标射线在「过 target、垂直于视线」那个平面上打到的点（相对 target）
+            var s = 1 - kk;
+            this.target[0] += (b.r[0] * nx * hw + b.u[0] * ny * hh) * s;
+            this.target[1] += (b.r[1] * nx * hw + b.u[1] * ny * hh) * s;
+            this.target[2] += (b.r[2] * nx * hw + b.u[2] * ny * hh) * s;
+            this.dist = nd;
+            this._dirty = true;
         },
 
         /** 目标深度上一像素等于多少世界单位：平移要 1:1 跟手就靠它 */
@@ -1015,15 +1086,7 @@
                 moved += Math.abs(dx) + Math.abs(dy);
 
                 if (mode === 'orbit') {
-                    // 拖拽量按视口高度归一：小窗口不再"一动就飞"。
-                    // 一旦开始拖，轴向视图自动退回自由视角（正交保留，别再切线）
-                    // 横向要和纵向同一套「抓取」直觉：往右拖 = 把物体往右拧。
-                    // 相机绕的是物体，所以 yaw 得**减**（以前写加号，横竖两个方向手感是反的，
-                    // 用户说"还是怪"主要就是它）
-                    var k = self._rotPerPx();
-                    self.yaw -= dx * k;
-                    self.pitch = Math.max(0.06, Math.min(1.52, self.pitch + dy * k));
-                    self._dirty = true;
+                    self._orbitBy(dx, dy);
                 } else {
                     self._panBy(dx, dy);
                 }
@@ -1048,41 +1111,87 @@
 
             c.addEventListener('wheel', e => {
                 e.preventDefault();
-                // 按 delta 指数缩放，并限幅：老版本一档 1.12 倍，
-                // 一格滚轮就跳到半个场景之外，也是"滑"的一部分
                 var d = e.deltaY * (e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? 100 : 1));
-                var k = Math.pow(1.0016, -d);
-                k = Math.max(0.75, Math.min(1.34, k));
-                self.dist = Math.max(4, Math.min(4000, self.dist * k));
-                self._dirty = true;
+                if (!d) return;
+                // 滚轮往**前**（deltaY < 0）= 拉近。老版本写成 pow(1.0016, -d)，
+                // 方向整个是反的：往前滚反而退远，跟所有 3D 软件的习惯都拧着。
+                // 单次限幅，免得一格滚轮/一阵触控板惯性就冲过半个场景。
+                var k = Math.exp(d * ZOOM_PER_PX);
+                k = Math.max(0.70, Math.min(1.42, k));
+                self._zoomTo(k, e.clientX, e.clientY);
             }, { passive: false });
 
             c.addEventListener('dblclick', () => self.resetCamera());
         },
 
-        /** 右上角坐标轴：点轴切平视/俯视，点中心回透视 */
+        /**
+         * 右上角视图导航（Blender 的那个圆盘 gizmo）：
+         *   - 浅色圆盘 + 六个轴端球；朝镜头的实心带字母，背面的空心画淡
+         *   - 单击球 → 从那个方向正对着看（正交）
+         *   - 在盘上直接拖 → 旋转视图（跟主画布同一套 _orbitBy，手感一致）
+         *   - 底部小字是当前视角，点它回透视
+         */
         _bindGizmo() {
             var g = this.gizmo;
             if (!g) return;
             var self = this;
+            var down = null, dragging = false;
+
             g.style.touchAction = 'none';
+            g.style.cursor = 'grab';
+            g.addEventListener('contextmenu', e => e.preventDefault());
+
             g.addEventListener('pointerdown', e => {
                 e.preventDefault();
                 e.stopPropagation();
-                const box = g.getBoundingClientRect();
-                const mx = e.clientX - box.left, my = e.clientY - box.top;
-                const hit = self._gizmoHit(mx, my);
-                if (hit === 'mode') { self.setPerspectiveView(); return; }
-                if (hit) self.setAxisView(hit);
+                g.setPointerCapture && g.setPointerCapture(e.pointerId);
+                var box = g.getBoundingClientRect();
+                // 记下按下的位置：松手时没怎么动才算「点」，动了就是「拖」
+                down = { x: e.clientX, y: e.clientY, mx: e.clientX - box.left, my: e.clientY - box.top };
+                dragging = false;
+                self._gizmoDrag = false;
             });
+
             g.addEventListener('pointermove', e => {
-                const box = g.getBoundingClientRect();
-                const hit = self._gizmoHit(e.clientX - box.left, e.clientY - box.top);
-                g.style.cursor = hit ? 'pointer' : 'default';
+                var box = g.getBoundingClientRect();
+                var mx = e.clientX - box.left, my = e.clientY - box.top;
+                if (down) {
+                    if (!dragging && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 3) {
+                        dragging = true;
+                        self._gizmoDrag = true;
+                        g.style.cursor = 'grabbing';
+                    }
+                    if (dragging) {
+                        self._orbitBy(e.clientX - down.x, e.clientY - down.y);
+                        down.x = e.clientX; down.y = e.clientY;
+                    }
+                    return;
+                }
+                var hit = self._gizmoHit(mx, my);
+                g.style.cursor = hit ? 'pointer' : 'grab';
                 if (hit !== self._gizmoHot) {
                     self._gizmoHot = hit;
                     self._paintGizmo();
                 }
+            });
+
+            var finish = function () {
+                if (!down) return;
+                var wasDrag = dragging;
+                var d = down;
+                down = null; dragging = false;
+                self._gizmoDrag = false;
+                g.style.cursor = 'grab';
+                if (wasDrag) { self._paintGizmo(); return; }
+                var hit = self._gizmoHit(d.mx, d.my);
+                if (!hit) return;
+                if (hit === 'mode') self.setPerspectiveView();
+                else if (hit === 'center') self.setPerspectiveView();
+                else self.setAxisView(hit);
+            };
+            g.addEventListener('pointerup', finish);
+            g.addEventListener('pointercancel', () => {
+                down = null; dragging = false; self._gizmoDrag = false; g.style.cursor = 'grab';
             });
             g.addEventListener('pointerleave', () => {
                 if (self._gizmoHot) { self._gizmoHot = null; self._paintGizmo(); }
@@ -1090,46 +1199,56 @@
         },
 
         /**
-         * 坐标轴的绘制中心 —— **唯一出处**。
+         * 坐标盘的几何 —— **唯一出处**。
          * 之前画线用一个中心、算端点用另一个（差 5px），俯视时 X 轴就成了斜线，
-         * 看着像钝角。所有跟坐标轴有关的位置都必须走这里。
+         * 看着像钝角。所有跟坐标盘有关的位置都必须走这里。
          */
         _gizmoCenter() {
             const g = this.gizmo;
-            const w = (g && g.clientWidth) || 96, h = (g && g.clientHeight) || 96;
-            return { cx: w / 2, cy: h / 2 - 5, w: w, h: h };
+            const w = (g && g.clientWidth) || 112;
+            const h = (g && g.clientHeight) || 128;
+            // 盘心在"方形"的中心，圆半径留 10px 边（底下还要写一行字）
+            return { cx: w / 2, cy: w / 2, w: w, h: h, R: Math.max(20, w / 2 - 10) };
         },
 
-        /** 坐标轴命中：返回 'x'|'y'|'z'|'mode'|null */
+        /** 六个轴端在盘上的落点（屏幕坐标）+ 朝向 */
+        _gizmoAxes() {
+            const c = this._gizmoCenter();
+            const b = this._basis();
+            const L = c.R * 0.76;
+            return [
+                { key: 'x', v: [1, 0, 0], color: '#D4553F', label: 'X' },
+                { key: '-x', v: [-1, 0, 0], color: '#D4553F', label: '-X' },
+                { key: 'y', v: [0, 1, 0], color: '#7CA644', label: 'Y' },
+                { key: '-y', v: [0, -1, 0], color: '#7CA644', label: '-Y' },
+                { key: 'z', v: [0, 0, 1], color: '#3B72C4', label: 'Z' },
+                { key: '-z', v: [0, 0, -1], color: '#3B72C4', label: '-Z' }
+            ].map(a => {
+                const sx = dot3(a.v, b.r), sy = -dot3(a.v, b.u);
+                // **注意负号**：f 是"眼睛看向场景"的方向，所以指向观众时 dot(v,f) < 0。
+                // 这里取负，让 depth > 0 表示朝观众（否则 +Z 明明朝上却被当成背面画成空圈）。
+                const depth = -dot3(a.v, b.f);
+                const len = Math.hypot(sx, sy);     // 0 = 正对/背对镜头（投影退化成一个点）
+                return { ...a, sx, sy, depth, len, x: c.cx + sx * L, y: c.cy + sy * L };
+            });
+        },
+
+        /** 命中：'x'|'-x'|…|'center'|'mode'|null */
         _gizmoHit(mx, my) {
             const g = this.gizmo;
             if (!g) return null;
             const c = this._gizmoCenter();
-            // 底部那行字是「透视 / 正交」的开关
-            if (my > c.h - 18) return 'mode';
+            // 盘外面那行字 = 「回透视」
+            if (my > c.cy + c.R - 1) return 'mode';
+            if (Math.hypot(mx - c.cx, my - c.cy) <= 6) return 'center';
+            let best = null, bestD = 1e9;
             for (const a of this._gizmoAxes()) {
-                if (a.deg) continue;        // 正对着镜头的轴没有可点位置（就在中心）
-                if (Math.hypot(mx - a.x, my - a.y) <= 13) return a.key;
+                if (a.len < 0.12) continue;     // 正对镜头的那根缩在中心，点了也没意义
+                const d = Math.hypot(mx - a.x, my - a.y);
+                const r = (a.key.charAt(0) === '-' ? 10 : 12) + 1;
+                if (d <= r && d < bestD) { best = a.key; bestD = d; }
             }
-            return null;
-        },
-
-        /** 三个轴在坐标轴小画布上的落点（屏幕坐标） */
-        _gizmoAxes() {
-            const c = this._gizmoCenter();
-            const b = this._basis();
-            const L = Math.min(c.w, c.h) * 0.34;
-            return [
-                { key: 'x', v: [1, 0, 0], color: '#CE6A63', label: 'X' },
-                { key: 'y', v: [0, 1, 0], color: '#5CA36E', label: 'Y' },
-                { key: 'z', v: [0, 0, 1], color: '#5B84C9', label: 'Z' }
-            ].map(a => {
-                const sx = dot3(a.v, b.r), sy = -dot3(a.v, b.u);
-                const depth = dot3(a.v, b.f);       // 越大越朝观众
-                // 屏幕投影长度太短 = 这根轴正对着/背对着镜头，画成中心的一个圈
-                const deg = Math.hypot(sx, sy) < 0.16;
-                return { ...a, sx, sy, depth, deg, x: c.cx + sx * L, y: c.cy + sy * L };
-            });
+            return best;
         },
 
         /**
@@ -1443,14 +1562,15 @@
         },
 
         /**
-         * 右上角坐标轴：画三个轴，顺便把当前是「透视 / 正视 / 俯视」写在下沿。
-         * 这是纯 2D 画布，跟 GL 无关 —— 它只是个指示灯 + 按钮。
+         * 画坐标盘（纯 2D canvas，跟 GL 无关）。
+         * 样式照 Blender 的视图导航 gizmo：浅色圆盘、六个轴端球、
+         * 朝向镜头的实心带字母、背面的空心画淡；底部一行写当前视角。
          */
         _paintGizmo() {
             const g = this.gizmo;
             if (!g) return;
             const dpr = Math.min(window.devicePixelRatio || 1, 2);
-            const w = g.clientWidth || 96, h = g.clientHeight || 96;
+            const w = g.clientWidth || 112, h = g.clientHeight || 128;
             if (g.width !== Math.round(w * dpr) || g.height !== Math.round(h * dpr)) {
                 g.width = Math.round(w * dpr);
                 g.height = Math.round(h * dpr);
@@ -1462,57 +1582,88 @@
             const c = this._gizmoCenter();
             const cx = c.cx, cy = c.cy;
             const axes = this._gizmoAxes();
-            // 远的先画，近的后画，叠起来才有前后感
-            axes.slice().sort((a, b) => a.depth - b.depth).forEach(a => {
-                const hot = this._gizmoHot === a.key;
-                ctx.strokeStyle = a.color;
-                ctx.lineWidth = hot ? 2.6 : 1.8;
 
-                // 正对镜头的轴：没有方向可画，就在中心套一个圈（Blender 也是这么表示）
-                const bx = a.deg ? cx : a.x;
-                const by = a.deg ? cy : a.y;
-                if (!a.deg) {
+            // 盘面
+            ctx.beginPath();
+            ctx.arc(cx, cy, c.R, 0, Math.PI * 2);
+            ctx.fillStyle = this._gizmoDrag ? 'rgba(236,238,242,.97)' : 'rgba(246,247,249,.93)';
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(20,22,26,.10)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            // 远的先画、近的后画，叠起来才有前后感
+            axes.slice().sort((a, b) => a.depth - b.depth).forEach(a => {
+                const neg = a.key.charAt(0) === '-';
+                const hot = this._gizmoHot === a.key;
+                const back = a.depth < -0.04;
+                const hollow = neg || back;      // 空心 = 负向轴 / 朝背面
+                const alpha = back ? 0.38 : 1;
+
+                // 投影长度太短 = 这根轴正对/背对镜头，缩到中心画（否则端点飘到盘边）
+                const shrink = Math.max(0, Math.min(1, (a.len - 0.08) / 0.28));
+                const bx = a.len < 0.08 ? cx : a.x;
+                const by = a.len < 0.08 ? cy : a.y;
+                const rad = (hollow ? 7.4 : 8.8) * (0.5 + 0.5 * shrink) + (hot ? 1.6 : 0);
+
+                ctx.globalAlpha = alpha;
+                if (a.len >= 0.08) {
                     ctx.beginPath();
                     ctx.moveTo(cx, cy);
                     ctx.lineTo(bx, by);
+                    ctx.strokeStyle = a.color;
+                    ctx.lineWidth = hot ? 2.2 : 1.6;
                     ctx.stroke();
                 }
 
                 ctx.beginPath();
-                ctx.arc(bx, by, a.deg ? (hot ? 10 : 8.5) : (hot ? 9 : 7.5), 0, Math.PI * 2);
-                ctx.fillStyle = a.color;
-                ctx.globalAlpha = (a.depth < -0.35 && !a.deg) ? 0.55 : 1;   // 朝背面的轴画淡一点
-                ctx.fill();
-                ctx.globalAlpha = 1;
-                if (a.deg) {        // 中心那圈用白描边压住底下的轴，不然糊在一起
-                    ctx.strokeStyle = '#fff';
-                    ctx.lineWidth = 1.5;
+                ctx.arc(bx, by, rad, 0, Math.PI * 2);
+                if (hollow) {
+                    ctx.fillStyle = 'rgba(255,255,255,.9)';
+                    ctx.fill();
+                    ctx.strokeStyle = a.color;
+                    ctx.lineWidth = hot ? 2.2 : 1.6;
+                    ctx.stroke();
+                } else {
+                    ctx.fillStyle = a.color;
+                    ctx.fill();
+                }
+                // 悬停：外面套一圈淡淡的光晕（只加 1.6px 半径根本看不出来hover没hover）
+                if (hot) {
+                    ctx.beginPath();
+                    ctx.arc(bx, by, rad + 3, 0, Math.PI * 2);
+                    ctx.strokeStyle = a.color;
+                    ctx.lineWidth = 2;
                     ctx.stroke();
                 }
+                ctx.globalAlpha = 1;
 
-                ctx.fillStyle = '#fff';
-                ctx.font = '700 9.5px system-ui, -apple-system, sans-serif';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText(a.label, bx, by + 0.5);
+                // 字母：太小的圈不写，省得糊成一团
+                if (rad >= 6.6) {
+                    ctx.fillStyle = hollow ? a.color : '#fff';
+                    ctx.font = `700 ${neg ? 7 : 9}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(a.label, bx, by + 0.5);
+                }
             });
 
-            // 中心小点：只当一个基准标记，不给点击（不然俯视时跟 Z 圈重叠）
+            // 中心点：点它回透视（俯视时 +Z 会缩在中心，所以画在最上层）
+            const hotC = this._gizmoHot === 'center';
             ctx.beginPath();
-            ctx.arc(cx, cy, 2.2, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(90,96,108,.45)';
+            ctx.arc(cx, cy, hotC ? 4.2 : 3, 0, Math.PI * 2);
+            ctx.fillStyle = hotC ? '#6B4EF2' : 'rgba(122,128,140,.55)';
             ctx.fill();
 
-            // 底部那行：当前视角，点一下切透视/正交
+            // 底部那行：当前视角，点它切回透视
             const mode = this.axisView();
             const hotM = this._gizmoHot === 'mode';
-            const txt = mode === 'z' ? '俯视' : mode === 'y' ? '正视' : mode === 'x' ? '侧视'
-                : this.ortho ? '正交' : '透视';
-            ctx.font = '600 9.5px system-ui, -apple-system, sans-serif';
-            ctx.fillStyle = hotM ? '#6B4EF2' : 'rgba(90,96,108,.85)';
+            const txt = this.ortho ? (MODE_LABEL[mode] || '正交') : '透视';
+            ctx.font = '600 10px system-ui, -apple-system, "Segoe UI", sans-serif';
+            ctx.fillStyle = hotM ? '#6B4EF2' : 'rgba(94,101,114,.9)';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText(txt, cx, h - 8);
+            ctx.fillText(txt, cx, h - 9);
         },
 
         /** 实例的世界矩阵：T(世界位置) · Rz · Ry · Rx · 镜像（Blender 的 XYZ Euler） */
