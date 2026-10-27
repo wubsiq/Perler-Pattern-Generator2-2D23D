@@ -538,15 +538,12 @@
         if (placing.kind !== 'stamp') {
             return W.regions.some(r => regionsOverlap({ x: o.x, y: o.y, w: placing.w, h: placing.h }, r));
         }
-        const cur = regionById(D.id);
-        if (!cur) return true;
-        // 整块都在区域内 → 一定放得下，不用逐格算
-        if (o.x >= cur.x && o.y >= cur.y &&
-            o.x + placing.w <= cur.x + cur.w && o.y + placing.h <= cur.y + cur.h) return false;
+        // 复制块可以落在任何区域上，所以只看"有没有一颗豆落在某个区域里"
+        if (!W.regions.length) return true;
         for (let y = 0; y < placing.h; y++) {
             for (let x = 0; x < placing.w; x++) {
                 if (!placing.cells[y * placing.w + x]) continue;
-                if (localOf(o.x + x, o.y + y)) return false;
+                if (regionAt(o.x + x, o.y + y)) return false;
             }
         }
         return true;
@@ -637,25 +634,40 @@
         const o = placingOriginAt(c, r);
 
         if (cur.kind === 'stamp') {
-            placing = null;
+            // 复制块可以落在**任何**区域上：配件组装就是要在几个区域之间来回搬，
+            // 只认当前区域的话，拖到隔壁就"落在区域外"，浮块还被吞掉，很难用。
             let n = 0, out = 0;
+            const touched = new Set();
+            const names = new Set();
             for (let y = 0; y < cur.h; y++) {
                 for (let x = 0; x < cur.w; x++) {
                     const code = cur.cells[y * cur.w + x];
                     // 空位不盖：复制的是"形状"，不是"一整块含空气的矩形"
                     if (!code) continue;
-                    const l = localOf(o.x + x, o.y + y);
-                    if (!l) { out++; continue; }
-                    const i = lidx(l.c, l.r);
-                    if (D.grid[i] !== code) { D.grid[i] = code; n++; }
+                    const wc = o.x + x, wr = o.y + y;
+                    const tgt = regionAt(wc, wr);
+                    if (!tgt) { out++; continue; }
+                    const i = (wr - tgt.y) * tgt.w + (wc - tgt.x);
+                    if (tgt.cells[i] !== code) { tgt.cells[i] = code; n++; }
+                    touched.add(tgt);
+                    names.add(tgt.name || ('区域 ' + tgt.id));
                 }
             }
-            if (n || out) {
-                if (n) snapshot('复制粘贴');
+            if (!n && out) {
+                // 一个豆都没落上：**留着浮块**，让人接着挪，别啪一下全消失
+                toast('这块位置没落到任何区域上，挪进区域里再点一下');
+                requestRender();
+                return null;
+            }
+            placing = null;
+            touched.forEach(r => { r._cacheDirty = true; });
+            if (n) {
+                snapshot('复制粘贴');
                 renderStats();
             }
-            toast(n ? `放了 ${n} 格` + (out ? `，${out} 格在区域外没放` : '')
-                : (out ? '整块落在区域外，先挪进区域里' : '这一块是空的'));
+            const where = names.size === 1 ? [...names][0] : `${names.size} 个区域`;
+            toast(n ? `放进「${where}」${n} 格` + (out ? `，${out} 格在区域外没放` : '')
+                : '这一块是空的');
             requestRender();
             return null;
         }
@@ -3240,6 +3252,13 @@
         renderStats();
         syncSizePanel();
         syncSelBar();
+        // 撤销改的可能是 3D 摆位：正在 3D 里看的话得把新数据推给渲染器，
+        // 否则数据回去了、画面还停在旧位置
+        if (view3d.mode === '3d' && view3d.inst) {
+            sync3dInstances(false);
+            syncInstFields();
+            view3d.inst._dirty = true;
+        }
         requestRender();
         markDirty();
     }
@@ -4658,11 +4677,32 @@
         if (view3d.mode === '3d') {
             const kk = e.key.toLowerCase();
             const step = e.shiftKey ? 5 : 1;
+
+            // ---- 抓取中：只认确定/取消/锁轴，别的键一律吃掉 ----
+            if (view3d.inst && view3d.inst.grabInfo()) {
+                if (e.key === 'Escape') { e.preventDefault(); endGrab3d(false); return; }
+                if (e.key === 'Enter') { e.preventDefault(); endGrab3d(true); return; }
+                if (kk === 'x' || kk === 'y' || kk === 'z') {
+                    e.preventDefault();
+                    view3d.inst.setGrabAxis(kk);
+                    return;
+                }
+                return;
+            }
+
+            // 3D 里同样要能撤销 / 重做：抓取落位是进历史的，按不动 Ctrl+Z 就白记了
+            if ((e.ctrlKey || e.metaKey) && (kk === 'z' || kk === 'y')) {
+                e.preventDefault();
+                if (kk === 'y' || e.shiftKey) redo(); else undo();
+                return;
+            }
             if (e.key === 'Escape') {
                 e.preventDefault();
                 select3d(null);
                 return;
             }
+            // G = Blender 那样抓着板走（组装配件最顺手的一条）
+            if (kk === 'g') { e.preventDefault(); beginGrab3d(); return; }
             if (e.key === 'ArrowLeft') { e.preventDefault(); nudge3d(0, -step); return; }
             if (e.key === 'ArrowRight') { e.preventDefault(); nudge3d(0, step); return; }
             // z 朝上：↑↓ 在地面上前后挪，PageUp/PageDown 才是抬高
@@ -6659,7 +6699,54 @@
             return null;
         }
         view3d.inst.onPick = (id) => select3d(id);
+        // 抓取（G）的三条回调：位置由编辑器落盘，渲染器只管算
+        view3d.inst.onGrabMove = (pos) => {
+            const r = grab3d.id != null ? regionById(grab3d.id) : null;
+            if (!r) return;
+            local3dOf(r).pos = pos.slice();
+            sync3dInstances(false);
+            syncInstFields();
+        };
+        view3d.inst.onGrabState = () => update3dBar();
         return view3d.inst;
+    }
+
+    /** 3D 抓取的一次会话：起点存下来，Esc 要还原 */
+    const grab3d = { id: null, start: null };
+
+    function beginGrab3d() {
+        const ed = view3d.inst;
+        if (!ed) return false;
+        if (view3d.picked == null) { toast('先在 3D 里点选一块，再按 G 挪'); return false; }
+        const r = regionById(view3d.picked);
+        if (!r || !ed.beginGrab()) return false;
+        grab3d.id = r.id;
+        grab3d.start = local3dOf(r).pos.slice();
+        update3dBar();
+        return true;
+    }
+
+    function endGrab3d(commit) {
+        const ed = view3d.inst;
+        if (!ed || !ed.grabInfo()) return false;
+        const info = ed.endGrab(commit);
+        const r = grab3d.id != null ? regionById(grab3d.id) : null;
+        if (r && info) {
+            const now = local3dOf(r).pos;
+            const moved = grab3d.start && now.some((v, i) => Math.abs(v - grab3d.start[i]) > 1e-9);
+            if (!commit) {
+                if (grab3d.start) { r.local.pos = grab3d.start.slice(); }
+                sync3dInstances(false);
+            } else if (moved) {
+                sync3dInstances(false);
+                snapshot('3D 摆位');       // 历史条目 = 改完的状态
+            }
+        }
+        grab3d.id = null;
+        grab3d.start = null;
+        syncInstFields();
+        update3dBar();
+        return true;
     }
 
     /** 区域在 3D 世界里的中心（z 轴向上，所以只有 x/y；高度看 local.pos[2]） */
@@ -6682,18 +6769,26 @@
             ed.selectedId = view3d.picked;
             ed._dirty = true;
         }
+        update3dBar();
+        renderInstPanel();
+    }
 
+    /** 底部那条提示：平时报选中了谁，抓取时切成操作说明 */
+    function update3dBar() {
         const bar = $('pick3d');
+        if (!bar) return;
         const r = view3d.picked != null ? regionById(view3d.picked) : null;
         if (!r) {
             bar.classList.remove('is-on');
             bar.textContent = '';
-        } else {
-            bar.classList.add('is-on');
-            // 用 textContent 拼，区域名是用户输入，别插 HTML
-            bar.textContent = `区域 ${r.id} · ${r.name} · ${r.w}×${r.h}`;
+            return;
         }
-        renderInstPanel();
+        const g = view3d.inst && view3d.inst.grabInfo();
+        bar.classList.add('is-on');
+        // 用 textContent 拼，区域名是用户输入，别插 HTML
+        bar.textContent = g
+            ? `挪动中 · 左键确定 · X/Y/Z 锁轴${g.axis ? `（已锁 ${g.axis.toUpperCase()}）` : ''} · Esc 取消`
+            : `区域 ${r.id} · ${r.name} · ${r.w}×${r.h}`;
     }
 
     /**
@@ -6933,6 +7028,76 @@
     ['PosX', 'PosY', 'PosZ', 'RotX', 'RotY', 'RotZ'].forEach(k => {
         const el = $('inst' + k);
         if (el) el.addEventListener('input', () => applyInstField(el));
+    });
+
+    /**
+     * 数值框拖拽改值（Blender 那种）：
+     * 按住左右拖就改，「轻点」还是正常聚焦打字 —— 位移不到 3px 不算拖。
+     * 绑定在整根轴上（轴字母 + 输入框），所以想拖哪里都行。
+     * 灵敏度：位移 0.25 格 / 像素、旋转 0.5 度 / 像素；按 Shift 变 1/10 细调。
+     */
+    function bindScrub(host, input, kind) {
+        if (!host || !input) return;
+        let drag = null;
+        host.addEventListener('pointerdown', e => {
+            if (e.button !== 0) return;
+            drag = { x: e.clientX, v: Number(input.value) || 0, moved: false, id: e.pointerId };
+        });
+        host.addEventListener('pointermove', e => {
+            if (!drag) return;
+            const dx = e.clientX - drag.x;
+            if (!drag.moved) {
+                if (Math.abs(dx) < 3) return;      // 可能是想点进去打字
+                drag.moved = true;
+                host.setPointerCapture && host.setPointerCapture(drag.id);
+                if (document.activeElement === input) input.blur();
+                const sel = window.getSelection && window.getSelection();
+                if (sel && sel.removeAllRanges) sel.removeAllRanges();
+            }
+            const per = (kind === 'rot' ? 0.5 : 0.25) * (e.shiftKey ? 0.1 : 1);
+            const v = drag.v + dx * per;
+            input.value = kind === 'rot' ? Math.round(v) : round1(v);
+            applyInstField(input);
+        });
+        const finish = (e) => {
+            if (!drag) return;
+            const wasDrag = drag.moved;
+            drag = null;
+            if (wasDrag) {
+                host.releasePointerCapture && e.pointerId != null &&
+                    host.hasPointerCapture && host.hasPointerCapture(e.pointerId) &&
+                    host.releasePointerCapture(e.pointerId);
+                syncInstFields();
+            }
+        };
+        host.addEventListener('pointerup', finish);
+        host.addEventListener('pointercancel', finish);
+        // 拖的时候别让页面跟着选中文字
+        host.addEventListener('dragstart', e => e.preventDefault());
+    }
+
+    // 焦点停在数字框里时按 G：当成"开始抓取"。不然 g 被吞进输入框、抓取也不响应，
+    // 用户刚拖完数字想接着挪一块，会觉得 G 失灵。
+    ['PosX', 'PosY', 'PosZ', 'RotX', 'RotY', 'RotZ'].forEach(k => {
+        const el = $('inst' + k);
+        if (!el) return;
+        el.addEventListener('keydown', e => {
+            if (e.key === 'Escape') { el.blur(); return; }
+            if (e.key.toLowerCase() === 'g' && !e.ctrlKey && !e.metaKey) {
+                e.preventDefault();
+                el.blur();
+                beginGrab3d();
+            }
+        });
+    });
+
+    ['PosX', 'PosY', 'PosZ'].forEach(k => {
+        const el = $('inst' + k);
+        if (el) bindScrub(el.closest('.inst-axis'), el, 'pos');
+    });
+    ['RotX', 'RotY', 'RotZ'].forEach(k => {
+        const el = $('inst' + k);
+        if (el) bindScrub(el.closest('.inst-axis'), el, 'rot');
     });
     $('instFlip').addEventListener('change', () => {
         const r = view3d.picked != null ? regionById(view3d.picked) : null;

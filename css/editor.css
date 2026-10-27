@@ -3674,6 +3674,8 @@ body.editor {
     font-weight: 700;
     font-size: 10.5px;
     color: #fff;
+    /* 提示"这里能左右拖" */
+    cursor: ew-resize;
 }
 
 .inst-axis.a-x i { background: #CE6A63; }

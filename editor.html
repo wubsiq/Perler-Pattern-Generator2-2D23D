@@ -88,7 +88,7 @@
             <!-- 3D 视图：跟 #board 互斥显示，同一份数据的另一个视图（不是导出） -->
             <canvas id="board3d"></canvas>
             <!-- 右上角坐标轴：看方向 + 点一下切平视/俯视（z 朝上） -->
-            <canvas id="axis3d" title="点轴切平视 / 俯视，点中心回透视"></canvas>
+            <canvas id="axis3d" title="点轴切平视 / 俯视，点底部文字回透视"></canvas>
 
             <!-- 画布尺寸手柄：跟着图纸走，拖四边/四角改格子数 -->
             <div class="ed-board-frame" id="boardFrame">
@@ -124,7 +124,7 @@
 
             <!-- 3D 视图的两条浮层：操作提示 / 选中信息 -->
             <div class="ed-3d-hint">
-                <span>点击选中</span><i>·</i><span>拖动旋转</span><i>·</i><span>滚轮缩放</span><i>·</i><span>右键 / Shift 平移</span><i>·</i><span>点右上坐标轴切平视</span><i>·</i><span>双击复位</span>
+                <span>点击选中</span><i>·</i><span>拖动旋转</span><i>·</i><span>滚轮缩放</span><i>·</i><span>右键 / Shift 平移</span><i>·</i><span>点右上坐标轴切平视</span><i>·</i><span>G 抓着走</span><i>·</i><span>双击复位</span>
             </div>            <div class="ed-3d-pick" id="pick3d"></div>
         </div>
 
@@ -594,16 +594,16 @@
 
                     <div class="inst-sec"><span>位置</span><em>世界坐标 · 格</em></div>
                     <div class="inst-trio">
-                        <label class="inst-axis a-x"><i>X</i><input class="inst-num" id="instPosX" type="number" step="1"></label>
-                        <label class="inst-axis a-y"><i>Y</i><input class="inst-num" id="instPosY" type="number" step="1"></label>
-                        <label class="inst-axis a-z"><i>Z</i><input class="inst-num" id="instPosZ" type="number" step="1"></label>
+                        <label class="inst-axis a-x" title="左右拖动改值（Shift 细调），点一下可以输入数字"><i>X</i><input class="inst-num" id="instPosX" type="number" step="1"></label>
+                        <label class="inst-axis a-y" title="左右拖动改值（Shift 细调），点一下可以输入数字"><i>Y</i><input class="inst-num" id="instPosY" type="number" step="1"></label>
+                        <label class="inst-axis a-z" title="左右拖动改值（Shift 细调），点一下可以输入数字"><i>Z</i><input class="inst-num" id="instPosZ" type="number" step="1"></label>
                     </div>
 
                     <div class="inst-sec"><span>旋转</span><em>度 · XYZ</em></div>
                     <div class="inst-trio">
-                        <label class="inst-axis a-x"><i>X</i><input class="inst-num" id="instRotX" type="number" step="15"></label>
-                        <label class="inst-axis a-y"><i>Y</i><input class="inst-num" id="instRotY" type="number" step="15"></label>
-                        <label class="inst-axis a-z"><i>Z</i><input class="inst-num" id="instRotZ" type="number" step="15"></label>
+                        <label class="inst-axis a-x" title="左右拖动改角度（Shift 细调），点一下可以输入数字"><i>X</i><input class="inst-num" id="instRotX" type="number" step="15"></label>
+                        <label class="inst-axis a-y" title="左右拖动改角度（Shift 细调），点一下可以输入数字"><i>Y</i><input class="inst-num" id="instRotY" type="number" step="15"></label>
+                        <label class="inst-axis a-z" title="左右拖动改角度（Shift 细调），点一下可以输入数字"><i>Z</i><input class="inst-num" id="instRotZ" type="number" step="15"></label>
                     </div>
 
                     <div class="inst-acts">
@@ -614,7 +614,7 @@
                         <button class="inst-btn" id="instReset" type="button">复位</button>
                     </div>
 
-                    <p class="inst-tip">Z 是离桌面的高度（朝上）。位置 = 2D 摆放 + 3D 偏移，改的是摆位，不动图纸。</p>
+                    <p class="inst-tip">数值可左右拖动改（Shift 细调）。装配时选中一块按 <b>G</b>，板子跟着鼠标走，X/Y/Z 锁轴，左键落定。</p>
                 </div>
             </div>
         </aside>

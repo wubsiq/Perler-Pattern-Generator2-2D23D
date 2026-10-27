@@ -743,13 +743,115 @@
             this.render();
         },
 
-        /** 回到透视斜视（Blender 里点小方块回到透视视角） */
+        /** 回透视斜视（Blender 里点小方块回到透视视角） */
         setPerspectiveView() {
             this.yaw = -0.42;
             this.pitch = 0.62;
             this.ortho = false;
             this._dirty = true;
             this.render();
+        },
+
+        /* ---------------- 抓取（G）：跟着鼠标挪实例 ---------------- */
+
+        /**
+         * Blender 式的 G：进入后实例跟着鼠标在它自己那一层平面上走，
+         * 左键落地、Esc 取消、X/Y/Z 锁轴。组装配件时不用再一个个填数字。
+         *
+         * 位移按**世界坐标**吸附（默认 1 格，按 Shift 变 0.1），
+         * 而不是吸附 local 偏移 —— 板中心落在半格上时，两者差半个单位。
+         */
+        beginGrab() {
+            if (this.selectedId == null) return false;
+            const it = this.items.get(this.selectedId);
+            if (!it) return false;
+            this._grab = {
+                id: it.id,
+                start: (it.local && it.local.pos ? it.local.pos : [0, 0, 0]).slice(),
+                axis: null,
+                ref: null,          // 第一次移动才定基准，避免一按下就"跳"到鼠标
+                refY: 0
+            };
+            this.canvas.style.cursor = 'move';
+            if (this.onGrabState) this.onGrabState({ active: true, axis: null });
+            return true;
+        },
+
+        /** 抓取中锁轴：'x' | 'y' | 'z' | null */
+        setGrabAxis(axis) {
+            const g = this._grab;
+            if (!g) return false;
+            g.axis = axis === g.axis ? null : axis;    // 再按一次取消锁定
+            // 注意：**不能**重置 ref。位移是「从按下 G 那一刻算起」的绝对量，
+            // 重置 ref 会让锁住的轴跳回起点、放开又跳回来。锁轴的正确语义是
+            // 「这条轴回到起点、只让另一条轴动」——跟 Blender 一致。
+            if (this.onGrabState) this.onGrabState({ active: true, axis: g.axis });
+            return true;
+        },
+
+        /** 结束抓取。commit=false 时不动数据（由外面还原起点） */
+        endGrab(commit) {
+            const g = this._grab;
+            if (!g) return null;
+            this._grab = null;
+            this.canvas.style.cursor = 'grab';
+            if (this.onGrabState) this.onGrabState({ active: false, axis: null });
+            return { id: g.id, start: g.start, committed: !!commit };
+        },
+
+        grabInfo() {
+            const g = this._grab;
+            return g ? { id: g.id, axis: g.axis, start: g.start.slice() } : null;
+        },
+
+        /** 抓取中的一次鼠标移动 → 目标 local.pos（世界吸附后转回偏移） */
+        _grabTo(clientX, clientY, shift) {
+            const g = this._grab;
+            if (!g) return;
+            const it = this.items.get(g.id);
+            if (!it) return;
+            const b = this._basis();
+            const ray = this._ray(clientX, clientY);
+            const snap = shift ? 0.1 : 1;
+            const base = [it.cx, it.cy, 0];
+
+            if (g.axis === 'z') {
+                const fxy = Math.hypot(b.f[0], b.f[1]);
+                let wz = null;
+                if (fxy > 0.12) {
+                    // 过板心、法线朝相机的竖直面：鼠标点在这个面上滑，取 z
+                    const n = [b.f[0] / fxy, b.f[1] / fxy, 0];
+                    const p0 = [base[0] + g.start[0], base[1] + g.start[1], g.start[2]];
+                    const den = dot3(n, ray.d);
+                    if (Math.abs(den) < 1e-6) return;
+                    const t = dot3(n, [p0[0] - ray.o[0], p0[1] - ray.o[1], p0[2] - ray.o[2]]) / den;
+                    if (t <= 0) return;
+                    wz = ray.o[2] + ray.d[2] * t;
+                } else {
+                    // 俯视时那个竖直面退化了，改成按屏幕纵向位移换算
+                    if (!g.ref) { g.ref = [0, 0, 0]; g.refY = clientY; return; }
+                    wz = g.start[2] + (g.refY - clientY) * this._worldPerPx();
+                }
+                const z = Math.round(wz / snap) * snap;
+                if (this.onGrabMove) this.onGrabMove([g.start[0], g.start[1], z]);
+                return;
+            }
+
+            // 地平面：用板子自己那一层，贴地/悬空都成立
+            const planeZ = g.start[2];
+            if (Math.abs(ray.d[2]) < 1e-6) return;
+            const t = (planeZ - ray.o[2]) / ray.d[2];
+            if (t <= 0) return;
+            const hx = ray.o[0] + ray.d[0] * t;
+            const hy = ray.o[1] + ray.d[1] * t;
+            if (!g.ref) { g.ref = [hx, hy, 0]; return; }     // 第一帧只定基准
+
+            let dx = hx - g.ref[0], dy = hy - g.ref[1];
+            if (g.axis === 'x') dy = 0;
+            if (g.axis === 'y') dx = 0;
+            const wx = Math.round((base[0] + g.start[0] + dx) / snap) * snap;
+            const wy = Math.round((base[1] + g.start[1] + dy) / snap) * snap;
+            if (this.onGrabMove) this.onGrabMove([wx - base[0], wy - base[1], g.start[2]]);
         },
 
         axisView() {
@@ -813,6 +915,12 @@
             c.addEventListener('contextmenu', e => e.preventDefault());
 
             c.addEventListener('pointerdown', e => {
+                // 抓取中：左键落地、右键取消，别让它顺手把相机转了
+                if (self._grab) {
+                    e.preventDefault();
+                    self.endGrab(e.button !== 2);
+                    return;
+                }
                 c.setPointerCapture && c.setPointerCapture(e.pointerId);
                 lastX = e.clientX; lastY = e.clientY;
                 moved = 0;
@@ -822,6 +930,10 @@
             });
 
             c.addEventListener('pointermove', e => {
+                if (self._grab) {
+                    self._grabTo(e.clientX, e.clientY, e.shiftKey);
+                    return;
+                }
                 if (!mode) {
                     self._hoverAt(e);
                     return;
@@ -885,7 +997,7 @@
                 const box = g.getBoundingClientRect();
                 const mx = e.clientX - box.left, my = e.clientY - box.top;
                 const hit = self._gizmoHit(mx, my);
-                if (hit === 'center') { self.setPerspectiveView(); return; }
+                if (hit === 'mode') { self.setPerspectiveView(); return; }
                 if (hit) self.setAxisView(hit);
             });
             g.addEventListener('pointermove', e => {
@@ -902,15 +1014,26 @@
             });
         },
 
-        /** 坐标轴命中：返回 'x'|'y'|'z'|'center'|null */
+        /**
+         * 坐标轴的绘制中心 —— **唯一出处**。
+         * 之前画线用一个中心、算端点用另一个（差 5px），俯视时 X 轴就成了斜线，
+         * 看着像钝角。所有跟坐标轴有关的位置都必须走这里。
+         */
+        _gizmoCenter() {
+            const g = this.gizmo;
+            const w = (g && g.clientWidth) || 96, h = (g && g.clientHeight) || 96;
+            return { cx: w / 2, cy: h / 2 - 5, w: w, h: h };
+        },
+
+        /** 坐标轴命中：返回 'x'|'y'|'z'|'mode'|null */
         _gizmoHit(mx, my) {
             const g = this.gizmo;
             if (!g) return null;
-            const w = g.clientWidth || 96, h = g.clientHeight || 96;
-            const cx = w / 2, cy = h / 2;
-            if (Math.hypot(mx - cx, my - cy) <= 12) return 'center';
-            const ax = this._gizmoAxes();
-            for (const a of ax) {
+            const c = this._gizmoCenter();
+            // 底部那行字是「透视 / 正交」的开关
+            if (my > c.h - 18) return 'mode';
+            for (const a of this._gizmoAxes()) {
+                if (a.deg) continue;        // 正对着镜头的轴没有可点位置（就在中心）
                 if (Math.hypot(mx - a.x, my - a.y) <= 13) return a.key;
             }
             return null;
@@ -918,11 +1041,9 @@
 
         /** 三个轴在坐标轴小画布上的落点（屏幕坐标） */
         _gizmoAxes() {
-            const g = this.gizmo;
-            const w = (g && g.clientWidth) || 96, h = (g && g.clientHeight) || 96;
-            const cx = w / 2, cy = h / 2;
+            const c = this._gizmoCenter();
             const b = this._basis();
-            const L = Math.min(w, h) * 0.34;
+            const L = Math.min(c.w, c.h) * 0.34;
             return [
                 { key: 'x', v: [1, 0, 0], color: '#CE6A63', label: 'X' },
                 { key: 'y', v: [0, 1, 0], color: '#5CA36E', label: 'Y' },
@@ -930,7 +1051,9 @@
             ].map(a => {
                 const sx = dot3(a.v, b.r), sy = -dot3(a.v, b.u);
                 const depth = dot3(a.v, b.f);       // 越大越朝观众
-                return { ...a, x: cx + sx * L, y: cy + sy * L, sx, sy, depth };
+                // 屏幕投影长度太短 = 这根轴正对着/背对着镜头，画成中心的一个圈
+                const deg = Math.hypot(sx, sy) < 0.16;
+                return { ...a, sx, sy, depth, deg, x: c.cx + sx * L, y: c.cy + sy * L };
             });
         },
 
@@ -1256,27 +1379,36 @@
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             ctx.clearRect(0, 0, w, h);
 
-            const cx = w / 2, cy = h / 2 - 5;
+            const c = this._gizmoCenter();
+            const cx = c.cx, cy = c.cy;
             const axes = this._gizmoAxes();
             // 远的先画，近的后画，叠起来才有前后感
             axes.slice().sort((a, b) => a.depth - b.depth).forEach(a => {
-                const len = Math.hypot(a.x - cx, a.y - cy);
                 const hot = this._gizmoHot === a.key;
-                ctx.beginPath();
-                ctx.moveTo(cx, cy);
-                ctx.lineTo(cx + (a.x - cx) * (len > 6 ? 1 : 0.2), cy + (a.y - cy) * (len > 6 ? 1 : 0.2));
                 ctx.strokeStyle = a.color;
                 ctx.lineWidth = hot ? 2.6 : 1.8;
-                ctx.stroke();
 
-                const bx = cx + (a.x - cx) * (len > 6 ? 1 : 0.2);
-                const by = cy + (a.y - cy) * (len > 6 ? 1 : 0.2);
+                // 正对镜头的轴：没有方向可画，就在中心套一个圈（Blender 也是这么表示）
+                const bx = a.deg ? cx : a.x;
+                const by = a.deg ? cy : a.y;
+                if (!a.deg) {
+                    ctx.beginPath();
+                    ctx.moveTo(cx, cy);
+                    ctx.lineTo(bx, by);
+                    ctx.stroke();
+                }
+
                 ctx.beginPath();
-                ctx.arc(bx, by, hot ? 9 : 7.5, 0, Math.PI * 2);
+                ctx.arc(bx, by, a.deg ? (hot ? 10 : 8.5) : (hot ? 9 : 7.5), 0, Math.PI * 2);
                 ctx.fillStyle = a.color;
-                ctx.globalAlpha = a.depth < -0.35 ? 0.55 : 1;   // 朝背面画淡一点
+                ctx.globalAlpha = (a.depth < -0.35 && !a.deg) ? 0.55 : 1;   // 朝背面的轴画淡一点
                 ctx.fill();
                 ctx.globalAlpha = 1;
+                if (a.deg) {        // 中心那圈用白描边压住底下的轴，不然糊在一起
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 1.5;
+                    ctx.stroke();
+                }
 
                 ctx.fillStyle = '#fff';
                 ctx.font = '700 9.5px system-ui, -apple-system, sans-serif';
@@ -1285,20 +1417,22 @@
                 ctx.fillText(a.label, bx, by + 0.5);
             });
 
-            // 中心小方块：点它回透视
-            const hotC = this._gizmoHot === 'center';
+            // 中心小点：只当一个基准标记，不给点击（不然俯视时跟 Z 圈重叠）
             ctx.beginPath();
-            ctx.arc(cx, cy, hotC ? 5 : 4, 0, Math.PI * 2);
-            ctx.fillStyle = hotC ? '#6B4EF2' : 'rgba(90,96,108,.55)';
+            ctx.arc(cx, cy, 2.2, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(90,96,108,.45)';
             ctx.fill();
 
+            // 底部那行：当前视角，点一下切透视/正交
             const mode = this.axisView();
+            const hotM = this._gizmoHot === 'mode';
+            const txt = mode === 'z' ? '俯视' : mode === 'y' ? '正视' : mode === 'x' ? '侧视'
+                : this.ortho ? '正交' : '透视';
             ctx.font = '600 9.5px system-ui, -apple-system, sans-serif';
-            ctx.fillStyle = 'rgba(90,96,108,.85)';
+            ctx.fillStyle = hotM ? '#6B4EF2' : 'rgba(90,96,108,.85)';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText(mode === 'z' ? '俯视' : mode === 'y' ? '正视' : mode === 'x' ? '侧视'
-                : this.ortho ? '正交' : '透视', cx, h - 8);
+            ctx.fillText(txt, cx, h - 8);
         },
 
         /** 实例的世界矩阵：T(世界位置) · Rz · Ry · Rx · 镜像（Blender 的 XYZ Euler） */
