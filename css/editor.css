@@ -3371,6 +3371,8 @@ body.editor {
     position: absolute;
     inset: 0;
     display: none;
+    /* canvas 是「替换元素」：绝对定位下 width:auto 取的是位图固有宽度（也就是 1px），
+       不是 left/right 拉出来的宽度。所以宽度必须显式给，不能靠 right 撑。 */
     width: 100%;
     height: 100%;
     cursor: grab;
@@ -3442,6 +3444,315 @@ body.editor {
 
 .editor.is-3d .ed-3d-pick.is-on { display: flex; }
 
+/* 两条浮层本来按视口居中；3D 里画布右侧给面板让了 222px，
+   不跟着挪就会偏到面板那边去 */
+@media (min-width: 761px) {
+    .editor.is-3d .ed-3d-hint,
+    .editor.is-3d .ed-3d-pick { left: calc(50% - 111px); }
+}
+
+/* =============================================================
+ * 3D 实例面板（Blender 那种：上面列表，下面数值）
+ * 只在 3D 出现；2D 的「图纸统计」在 3D 里会让位给它
+ * ============================================================= */
+
+.ed-3dpanel {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 268px;
+    display: none;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--surface);
+    border-left: 1px solid var(--line);
+    box-shadow: -10px 0 26px rgba(20, 22, 26, .07);
+    z-index: 18;
+}
+
+.editor.is-3d .ed-3dpanel { display: flex; }
+
+/* 画布让出面板那一条（268 面板 - 46 视口本来就留的收起态导轨宽）。
+   不能用 right 撑开：canvas 是替换元素，width:auto 会退回位图固有宽度。 */
+.editor.is-3d #board3d {
+    right: auto;
+    width: calc(100% - 222px);
+}
+
+.inst-head {
+    flex: none;
+    height: 42px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 0 8px 0 12px;
+    border-bottom: 1px solid var(--line);
+}
+
+.inst-title {
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--ink);
+    letter-spacing: .01em;
+}
+
+.inst-badge {
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: var(--surface-3);
+    color: #6B7280;
+    font: 600 11px/18px system-ui, -apple-system, "Segoe UI", sans-serif;
+    text-align: center;
+}
+
+.inst-icon {
+    margin-left: auto;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #6B7280;
+    font: 600 11.5px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+}
+
+.inst-icon:hover { background: var(--surface-3); color: var(--ink); }
+
+/* ---- 列表 ---- */
+
+.inst-list {
+    flex: 0 1 auto;
+    max-height: 46%;
+    overflow-y: auto;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border-bottom: 1px solid var(--line);
+}
+
+.inst-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    width: 100%;
+    padding: 6px 7px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ink);
+    font: 500 12px/1.25 system-ui, -apple-system, "Segoe UI", sans-serif;
+    text-align: left;
+    cursor: pointer;
+    transition: background .12s, box-shadow .12s;
+}
+
+.inst-row:hover { background: var(--surface-3); }
+
+.inst-row.is-on {
+    background: #EEF0FF;
+    box-shadow: inset 0 0 0 1px rgba(107, 78, 242, .35);
+}
+
+.inst-dot {
+    flex: none;
+    width: 9px;
+    height: 9px;
+    border-radius: 3px;
+    box-shadow: 0 0 0 1px rgba(20, 22, 26, .08);
+}
+
+.inst-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.inst-meta {
+    flex: none;
+    color: #9AA1AC;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---- 数值区 ---- */
+
+.inst-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px 12px 14px;
+}
+
+.inst-empty {
+    margin: 18px 2px;
+    color: #9AA1AC;
+    font-size: 12px;
+    line-height: 1.7;
+}
+
+.inst-who {
+    margin-bottom: 10px;
+    padding-bottom: 9px;
+    border-bottom: 1px dashed var(--line);
+    color: #4B5563;
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.inst-sec {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    margin: 10px 0 6px;
+    color: var(--ink);
+    font-size: 11.5px;
+    font-weight: 700;
+}
+
+.inst-sec em {
+    font-style: normal;
+    font-weight: 500;
+    font-size: 10.5px;
+    color: #9AA1AC;
+}
+
+.inst-trio {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+}
+
+/* 一根轴：左边一个小字母条，右边是数字。配色照 Blender 的 XYZ（红绿蓝），
+   但压得很淡，免得在这个浅灰界面里跳出来 */
+.inst-axis {
+    display: flex;
+    align-items: stretch;
+    min-width: 0;
+    border-radius: 6px;
+    background: #F5F6F9;
+    box-shadow: inset 0 0 0 1px rgba(20, 22, 26, .07);
+    overflow: hidden;
+}
+
+.inst-axis i {
+    flex: none;
+    width: 17px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-style: normal;
+    font-weight: 700;
+    font-size: 10.5px;
+    color: #fff;
+}
+
+.inst-axis.a-x i { background: #CE6A63; }
+.inst-axis.a-y i { background: #5CA36E; }
+.inst-axis.a-z i { background: #5B84C9; }
+
+.inst-num {
+    flex: 1;
+    min-width: 0;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    padding: 5px 4px;
+    color: var(--ink);
+    font: 500 12px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    outline: none;
+}
+
+.inst-num:focus { background: #fff; box-shadow: inset 0 0 0 1px rgba(107, 78, 242, .5); }
+
+/* 去掉 number 输入框的上下箭头：三列并排时它会把数字挤没 */
+.inst-num::-webkit-outer-spin-button,
+.inst-num::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.inst-num[type=number] { -moz-appearance: textfield; appearance: textfield; }
+
+.inst-acts { margin-top: 12px; }
+
+.inst-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #4B5563;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.inst-check input { accent-color: #6B4EF2; }
+
+.inst-btns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.inst-btn {
+    padding: 6px 0;
+    border: 0;
+    border-radius: 6px;
+    background: var(--surface-3);
+    color: var(--ink);
+    font: 600 12px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+}
+
+.inst-btn:hover { background: #E4E7ED; }
+
+.inst-tip {
+    margin: 12px 0 0;
+    color: #A6ACB6;
+    font-size: 11px;
+    line-height: 1.65;
+}
+
+/* hidden 必须压过上面的 display 声明 —— 作者样式的优先级永远高于 UA 的 [hidden] */
+#instFields[hidden],
+.inst-empty[hidden] {
+    display: none;
+}
+
+
 @media (max-width: 760px) {
     .ed-viewmode-btn { min-width: 32px; padding: 5px 7px; font-size: 11px; }
+
+    /* 窄屏放不下并排面板：实例面板改成底部抽屉，画布保持整宽 */
+    .editor.is-3d #board3d {
+        right: auto;
+        width: 100%;
+        height: calc(100% - 42%);
+    }
+
+    .editor.is-3d .ed-3dpanel {
+        /* left 不能给 0：左侧工具导轨 z-index 更高，会压住面板头 52px 的内容 */
+        left: 52px;
+        right: 0;
+        top: auto;
+        width: auto;
+        height: 42%;
+        border-left: 0;
+        border-top: 1px solid var(--line);
+        box-shadow: 0 -10px 26px rgba(20, 22, 26, .07);
+    }
+
+    .inst-list { max-height: 38%; }
+    .editor.is-3d .ed-3d-pick { bottom: auto; top: 10px; }
 }

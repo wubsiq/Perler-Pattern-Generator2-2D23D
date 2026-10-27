@@ -8,22 +8,35 @@
  *                    每块有自己的位置/旋转/镜像（region.local）。
  *
  * 数据流（单向）：
- *   region.cells(色号字符串[]) ──bakeRegionTexture（在 editor.js 里，能用 PAL_MAP）──▶ canvas
- *   canvas ──setInstance 上传──▶ GL 纹理 + 板几何（w/h 决定尺寸）
- *   每帧：model = T(世界位置) · T(local.pos) · R(local.rot) · S(flipX)
+ *   region.cells(色号字符串[]) ──bakeRegionTexture（在 editor.js 里，能用 PAL_MAP）──▶ canvas + shape
+ *   canvas+shape ──setInstance──▶ GL 纹理 + 按「有豆的格子」生成的几何
+ *   每帧：model = T(世界位置) · T(local.pos) · Ry · Rx · Rz · S(flipX)
  *
- * 关键约定：
- *   1 格 = 1 世界单位。板厚固定 THICK。
- *   2D 的 (x, y) 直接映射成 3D 的 (x, z)，所以 3D 里各板的相对位置跟 2D 一致 ——
- *   用户扫一眼就知道哪块是哪块，不用重新学一套空间关系。local.pos 叠在这之上。
+ * 三条关键约定：
  *
- * 坐标轴：y 朝上；-z 朝屏幕里（默认机位在 +z）。
+ *   1) 一格 = 1 世界单位。板厚固定 THICK。
+ *      2D 的 (x, y) 直接映射成 3D 的 (x, z)，所以 3D 里各板的相对位置跟 2D 一致 ——
+ *      用户扫一眼就知道哪块是哪块，不用重新学一套空间关系。local.pos 叠在这之上。
+ *
+ *   2) 形状来自格子掩码，不是外接矩形。
+ *      只有 mask=1 的格子才生成顶面/侧壁/底面，空格子什么都不生成。
+ *      于是「不规则配件」在 3D 里就是它本来的形状，不是一个把整块画布
+ *      都包进去的长方形 —— 配件分割要的就是这个。
+ *
+ *   3) 相机手感按「抓取」而不是「飞」：
+ *      平移 1:1 跟手（光标下的那个点不动），旋转灵敏度按视口高度归一，
+ *      滚轮按 delta 指数缩放。早期版本旋转 0.008 rad/px、平移按 dist 的
+ *      千分之一硬套，两者都严重超速，用户反馈「太滑了」。
+ *
+ * 坐标轴：y 朝上；-z 朝屏幕里（默认机位在 +z）。网格第 0 行在 z 最负侧。
  */
 (function () {
     'use strict';
 
     var THICK = 1.1;            // 板厚（格）
     var MAX_TEX = 2048;         // 单边纹理上限，超了就降烘焙分辨率
+    var FLOATS = 12;            // pos(3) normal(3) uv(2) color(3) texFlag(1)
+    var STRIDE = FLOATS * 4;    // 字节步长
 
     /* ============================ 矩阵（列主序） ============================ */
 
@@ -115,24 +128,59 @@
         return m;
     }
 
-    /** 法线矩阵：只有旋转 + 镜像，所以取旋转部分、镜像轴取反即可（不用求逆）。 */
-    function normalMat(model, flipX) {
-        var m = new Float32Array(9);
-        var sx = flipX ? -1 : 1;
-        // model 的左上 3x3 = R·S，S 是对角 (±1,1,1)。
-        // 法线要走 R·S⁻¹ = R·S（S 自逆），再除以 sx 归一 —— 直接乘 sx 就够。
-        m[0] = model[0] * sx; m[1] = model[1] * sx; m[2] = model[2] * sx;
-        m[3] = model[4]; m[4] = model[5]; m[5] = model[6];
-        m[6] = model[8]; m[7] = model[9]; m[8] = model[10];
-        return m;
+    /** 4×4 求逆（glMatrix 那套伴随矩阵展开）。拾取要把射线送进局部空间，必须用真的逆。 */
+    function mInvert(m) {
+        var o = new Float32Array(16);
+        o[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] + m[9] * m[7] * m[14] + m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
+        o[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] - m[8] * m[7] * m[14] - m[12] * m[6] * m[11] + m[12] * m[7] * m[10];
+        o[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] + m[8] * m[7] * m[13] + m[12] * m[5] * m[11] - m[12] * m[7] * m[9];
+        o[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14] - m[8] * m[6] * m[13] - m[12] * m[5] * m[10] + m[12] * m[6] * m[9];
+        o[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15] - m[9] * m[3] * m[14] - m[13] * m[2] * m[11] + m[13] * m[3] * m[10];
+        o[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15] + m[8] * m[3] * m[14] + m[12] * m[2] * m[11] - m[12] * m[3] * m[10];
+        o[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15] - m[8] * m[3] * m[13] - m[12] * m[1] * m[11] + m[12] * m[3] * m[9];
+        o[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14] + m[8] * m[2] * m[13] + m[12] * m[1] * m[10] - m[12] * m[2] * m[9];
+        o[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] + m[5] * m[3] * m[14] + m[13] * m[2] * m[7] - m[13] * m[3] * m[6];
+        o[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15] - m[4] * m[3] * m[14] - m[12] * m[2] * m[7] + m[12] * m[3] * m[6];
+        o[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15] + m[4] * m[3] * m[13] + m[12] * m[1] * m[7] - m[12] * m[3] * m[5];
+        o[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14] - m[4] * m[2] * m[13] - m[12] * m[1] * m[6] + m[12] * m[2] * m[5];
+        o[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11] - m[5] * m[3] * m[10] - m[9] * m[2] * m[7] + m[9] * m[3] * m[6];
+        o[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] + m[4] * m[3] * m[10] + m[8] * m[2] * m[7] - m[8] * m[3] * m[6];
+        o[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] - m[4] * m[3] * m[9] - m[8] * m[1] * m[7] + m[8] * m[3] * m[5];
+        o[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] + m[4] * m[2] * m[9] + m[8] * m[1] * m[6] - m[8] * m[2] * m[5];
+        var det = m[0] * o[0] + m[1] * o[4] + m[2] * o[8] + m[3] * o[12];
+        if (!det) return identity();
+        det = 1 / det;
+        for (var i = 0; i < 16; i++) o[i] *= det;
+        return o;
+    }
+
+    function xformPoint(m, p) {
+        return [
+            m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12],
+            m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13],
+            m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]
+        ];
+    }
+
+    /** 方向向量只要 3×3 那部分（本场景的 model 只有旋转 + 单位缩放） */
+    function xformDir(m, d) {
+        return [
+            m[0] * d[0] + m[4] * d[1] + m[8] * d[2],
+            m[1] * d[0] + m[5] * d[1] + m[9] * d[2],
+            m[2] * d[0] + m[6] * d[1] + m[10] * d[2]
+        ];
     }
 
     /* ============================== 着色器 ============================== */
 
+    // 顶点自带颜色 + 是否采样贴图，于是「顶面贴图 / 侧面纯色 / 底面暗色」
+    // 可以合并成一次 drawArrays —— 少一次状态切换，也不用再分 topCount/sideCount。
     var VS = [
         'attribute vec3 aPos;',
         'attribute vec3 aNormal;',
         'attribute vec2 aUV;',
+        'attribute vec3 aColor;',
+        'attribute float aTexFlag;',
         'uniform mat4 uProj;',
         'uniform mat4 uView;',
         'uniform mat4 uModel;',
@@ -140,11 +188,15 @@
         'varying vec2 vUV;',
         'varying vec3 vN;',
         'varying vec3 vWorld;',
+        'varying vec3 vCol;',
+        'varying float vTex;',
         'void main() {',
         '  vec4 wp = uModel * vec4(aPos, 1.0);',
         '  vWorld = wp.xyz;',
         '  vN = normalize(uNormalMat * aNormal);',
         '  vUV = aUV;',
+        '  vCol = aColor;',
+        '  vTex = aTexFlag;',
         '  gl_Position = uProj * uView * wp;',
         '}'
     ].join('\n');
@@ -154,21 +206,24 @@
         'varying vec2 vUV;',
         'varying vec3 vN;',
         'varying vec3 vWorld;',
+        'varying vec3 vCol;',
+        'varying float vTex;',
         'uniform sampler2D uTex;',
-        'uniform float uUseTex;',
+        'uniform float uHasTex;',
         'uniform vec3 uColor;',
         'uniform vec3 uEye;',
         'uniform float uHover;',
         'uniform float uFlat;',
         'void main() {',
-        '  vec3 base = mix(uColor, texture2D(uTex, vUV).rgb, uUseTex);',
+        '  float ft = vTex * uHasTex;',
+        '  vec3 base = mix(uColor * vCol, texture2D(uTex, vUV).rgb, ft);',
         // 主光从左上前方来
         '  vec3 L = normalize(vec3(-0.45, 0.86, 0.55));',
         '  float diff = max(dot(normalize(vN), L), 0.0);',
         // 顶面贴的是图纸本身：颜色必须跟 2D 看到的完全一致，所以几乎不打光
         // （早期版本让它跟侧面一起吃光照，白底被压成灰底、豆子全暗一档，
         //   用户拿 3D 判断颜色就会判错——这个视图的第一职责是看清，不是好看）
-        '  float lit = (uUseTex > 0.5) ? 1.0 : (0.62 + 0.38 * diff);',
+        '  float lit = mix(0.62 + 0.38 * diff, 1.0, ft);',
         // 侧面越远越淡一点，给一点纵深
         '  float d = length(vWorld - uEye);',
         '  lit *= 1.0 - clamp((d - 200.0) / 900.0, 0.0, 0.10);',
@@ -192,70 +247,200 @@
 
     /* ============================== 几何 ============================== */
 
+    function rgbOf(n) {
+        return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+    }
+
     /**
-     * 一块板的几何：顶面 + 4 个侧面。
-     * 本地空间：x∈[-w/2,w/2]，y∈[0,THICK]，z∈[-h/2,h/2]；原点在板中心的地面。
-     * 返回 { data: Float32Array, topCount, sideOffset(顶点数) }
-     * 布局：pos(3) normal(3) uv(2) → 8 floats/顶点
+     * 沿 x 合并连续段（行内）。
+     * inside(x,y) 为真且颜色相同才并成一段 —— 分段按颜色切，侧壁才能带上各自的豆色。
+     * 返回 [{ y, x0, x1 }]，x1 不含。
      */
-    function buildBoard(w, h) {
-        var hw = w / 2, hh = h / 2, t = THICK;
-        var v = [];
-        function push(px, py, pz, nx, ny, nz, u, uv2) {
-            v.push(px, py, pz, nx, ny, nz, u, uv2);
+    function hRuns(w, h, inside, colors, split) {
+        var out = [];
+        for (var y = 0; y < h; y++) {
+            var x = 0;
+            while (x < w) {
+                if (!inside(x, y)) { x++; continue; }
+                var x0 = x;
+                var c0 = split ? colors[y * w + x] : 0;
+                x++;
+                while (x < w && inside(x, y) && (!split || colors[y * w + x] === c0)) x++;
+                out.push({ y: y, x0: x0, x1: x });
+            }
         }
-        // ---- 顶面（两个三角）----
-        // 绕序必须让 (b-a)×(c-a) 指向 +y，否则被 CULL_FACE 当背面剔掉 ——
-        // 表现是「只看得见一圈侧壁、图完全没有」，而且不报任何错。
-        // 另外 z 越负越靠上，所以 UV 的 v 在 z=-hh 处为 1。
-        push(-hw, t, -hh, 0, 1, 0, 0, 1);
-        push(-hw, t, hh, 0, 1, 0, 0, 0);
-        push(hw, t, hh, 0, 1, 0, 1, 0);
+        return out;
+    }
 
-        push(-hw, t, -hh, 0, 1, 0, 0, 1);
-        push(hw, t, hh, 0, 1, 0, 1, 0);
-        push(hw, t, -hh, 0, 1, 0, 1, 1);
+    /** 沿 y 合并连续段（列内），给左右侧壁用。返回 [{ x, y0, y1 }]，y1 不含。 */
+    function vRuns(w, h, inside, colors, split) {
+        var out = [];
+        for (var x = 0; x < w; x++) {
+            var y = 0;
+            while (y < h) {
+                if (!inside(x, y)) { y++; continue; }
+                var y0 = y;
+                var c0 = split ? colors[y * w + x] : 0;
+                y++;
+                while (y < h && inside(x, y) && (!split || colors[y * w + x] === c0)) y++;
+                out.push({ x: x, y0: y0, y1: y });
+            }
+        }
+        return out;
+    }
 
-        var topCount = 6;
+    /**
+     * 一块板的几何 —— 只沿着 mask=1 的格子生成。
+     *
+     * 本地空间：x∈[-w/2,w/2]，y∈[0,THICK]，z∈[-h/2,h/2]；原点在板中心的地面。
+     * 网格第 0 行落在 z 最负的一侧（跟贴图 v=1 对应，别弄反：翻了就是上下镜像）。
+     *
+     * @param {number} w,h 区域格数
+     * @param {{mask:Uint8Array, colors:Uint32Array}} shape
+     * @param {number} texW,texH 贴图像素尺寸（用来把 UV 内缩半个纹素，避免边缘渗出底色）
+     * @returns {{data:Float32Array, count:number}}
+     */
+    function buildBoard(w, h, shape, texW, texH) {
+        var hw = w / 2, hh = h / 2, t = THICK;
+        var mask = shape && shape.mask;
+        var colors = (shape && shape.colors) || new Uint32Array(w * h);
+        var v = [];
+        var iu = texW ? 0.5 / texW : 0;
+        var iv = texH ? 0.5 / texH : 0;
 
-        // ---- 侧面（4 个，法线朝外）----
-        // 前 (+z)
-        push(-hw, 0, hh, 0, 0, 1, 0, 0);
-        push(hw, 0, hh, 0, 0, 1, 1, 0);
-        push(hw, t, hh, 0, 0, 1, 1, 1);
-        push(-hw, 0, hh, 0, 0, 1, 0, 0);
-        push(hw, t, hh, 0, 0, 1, 1, 1);
-        push(-hw, t, hh, 0, 0, 1, 0, 1);
-        // 后 (-z)
-        push(hw, 0, -hh, 0, 0, -1, 0, 0);
-        push(-hw, 0, -hh, 0, 0, -1, 1, 0);
-        push(-hw, t, -hh, 0, 0, -1, 1, 1);
-        push(hw, 0, -hh, 0, 0, -1, 0, 0);
-        push(-hw, t, -hh, 0, 0, -1, 1, 1);
-        push(hw, t, -hh, 0, 0, -1, 0, 1);
-        // 右 (+x)
-        push(hw, 0, hh, 1, 0, 0, 0, 0);
-        push(hw, 0, -hh, 1, 0, 0, 1, 0);
-        push(hw, t, -hh, 1, 0, 0, 1, 1);
-        push(hw, 0, hh, 1, 0, 0, 0, 0);
-        push(hw, t, -hh, 1, 0, 0, 1, 1);
-        push(hw, t, hh, 1, 0, 0, 0, 1);
-        // 左 (-x)
-        push(-hw, 0, -hh, -1, 0, 0, 0, 0);
-        push(-hw, 0, hh, -1, 0, 0, 1, 0);
-        push(-hw, t, hh, -1, 0, 0, 1, 1);
-        push(-hw, 0, -hh, -1, 0, 0, 0, 0);
-        push(-hw, t, hh, -1, 0, 0, 1, 1);
-        push(-hw, t, -hh, -1, 0, 0, 0, 1);
+        function vert(p, n, uv, c, tf) {
+            v.push(p[0], p[1], p[2], n[0], n[1], n[2], uv[0], uv[1], c[0], c[1], c[2], tf);
+        }
+
+        // 四点面：绕序按给定法线自动纠正。
+        // 手写绕序踩过一次 ——「顶面全被背面剔除，只剩一圈侧壁」且不报错，
+        // 所以这里一律算一遍叉积再决定顺序，不给它出错的机会。
+        function quad(P, N, UV, C, TF) {
+            var ax = P[1][0] - P[0][0], ay = P[1][1] - P[0][1], az = P[1][2] - P[0][2];
+            var bx = P[2][0] - P[0][0], by = P[2][1] - P[0][1], bz = P[2][2] - P[0][2];
+            var cx = ay * bz - az * by, cy = az * bx - ax * bz, cz = ax * by - ay * bx;
+            var order = (cx * N[0] + cy * N[1] + cz * N[2]) < 0 ? [0, 2, 1, 0, 3, 2] : [0, 1, 2, 0, 2, 3];
+            for (var k = 0; k < 6; k++) {
+                var i = order[k];
+                vert(P[i], N, UV[i], C, TF);
+            }
+        }
+
+        if (!mask) {
+            return { data: new Float32Array(0), count: 0, lines: new Float32Array(0), lineCount: 0 };
+        }
+
+        // ---- 轮廓线（选中时贴形描一圈）----
+        // 只沿「有豆 ↔ 空格」的交界画，于是框住的是图形本身，不是区域外接矩形。
+        // 以前用外接矩形套框：不规则的图形套一个 29×29 的大方框，看着像画错了。
+        var lv = [];
+        function edge(x1, z1, x2, z2) {
+            lv.push(x1, t + 0.03, z1, 0, 1, 0, 0, 0, 1, 1, 1, 0);
+            lv.push(x2, t + 0.03, z2, 0, 1, 0, 0, 0, 1, 1, 1, 0);
+        }
+
+        var filled = function (x, y) {
+            return x >= 0 && x < w && y >= 0 && y < h && mask[y * w + x] === 1;
+        };
+
+        var UP = [0, 1, 0], DOWN = [0, -1, 0];
+        var WHITE = [1, 1, 1];
+
+        // ---- 顶面（贴图）：行内合并成段 ----
+        hRuns(w, h, filled, null, false).forEach(function (r) {
+            var y = r.y;
+            var lx0 = r.x0 - hw, lx1 = r.x1 - hw;
+            var lz0 = y - hh, lz1 = y + 1 - hh;     // 第 0 行在最负的 z 侧
+            var u0 = r.x0 / w + iu, u1 = r.x1 / w - iu;
+            var vA = (h - y) / h - iv;              // z=lz0 那一侧（v 大）
+            var vB = (h - y - 1) / h + iv;          // z=lz1 那一侧
+            quad(
+                [[lx0, t, lz0], [lx0, t, lz1], [lx1, t, lz1], [lx1, t, lz0]],
+                UP,
+                [[u0, vA], [u0, vB], [u1, vB], [u1, vA]],
+                WHITE, 1
+            );
+        });
+
+        // ---- 底面（纯色，压暗）：只在能透过去的时候才看得见，但没有它翻到下面就是空的 ----
+        hRuns(w, h, filled, colors, true).forEach(function (r) {
+            var y = r.y;
+            var lx0 = r.x0 - hw, lx1 = r.x1 - hw;
+            var lz0 = y - hh, lz1 = y + 1 - hh;
+            var c = rgbOf(colors[y * w + r.x0]).map(function (q) { return q * 0.55; });
+            quad(
+                [[lx0, 0, lz0], [lx0, 0, lz1], [lx1, 0, lz1], [lx1, 0, lz0]],
+                DOWN,
+                [[0, 0], [0, 0], [0, 0], [0, 0]],
+                c, 0
+            );
+        });
+
+        // ---- 四条侧壁：只在「这一格的邻格是空的」那一面生成 ----
+        var SIDE = 0.80;
+        var NZ = [0, 0, -1], PZ = [0, 0, 1], NX = [-1, 0, 0], PX = [1, 0, 0];
+
+        // 前侧（z 最小那一面）
+        hRuns(w, h, function (x, y) { return filled(x, y) && !filled(x, y - 1); }, colors, true)
+            .forEach(function (r) {
+                var y = r.y;
+                var lx0 = r.x0 - hw, lx1 = r.x1 - hw, lz = y - hh;
+                var c = rgbOf(colors[y * w + r.x0]).map(function (q) { return q * SIDE; });
+                quad([[lx0, 0, lz], [lx1, 0, lz], [lx1, t, lz], [lx0, t, lz]], NZ,
+                    [[0, 0], [0, 0], [0, 0], [0, 0]], c, 0);
+            });
+
+        // 后侧（z 最大那一面）
+        hRuns(w, h, function (x, y) { return filled(x, y) && !filled(x, y + 1); }, colors, true)
+            .forEach(function (r) {
+                var y = r.y;
+                var lx0 = r.x0 - hw, lx1 = r.x1 - hw, lz = y + 1 - hh;
+                var c = rgbOf(colors[y * w + r.x0]).map(function (q) { return q * SIDE; });
+                quad([[lx0, 0, lz], [lx1, 0, lz], [lx1, t, lz], [lx0, t, lz]], PZ,
+                    [[0, 0], [0, 0], [0, 0], [0, 0]], c, 0);
+            });
+
+        // 左侧（x 最小那一面）
+        vRuns(w, h, function (x, y) { return filled(x, y) && !filled(x - 1, y); }, colors, true)
+            .forEach(function (r) {
+                var x = r.x, lx = x - hw;
+                var lz0 = r.y0 - hh, lz1 = r.y1 - hh;
+                var c = rgbOf(colors[r.y0 * w + x]).map(function (q) { return q * SIDE; });
+                quad([[lx, 0, lz0], [lx, 0, lz1], [lx, t, lz1], [lx, t, lz0]], NX,
+                    [[0, 0], [0, 0], [0, 0], [0, 0]], c, 0);
+            });
+
+        // 右侧（x 最大那一面）
+        vRuns(w, h, function (x, y) { return filled(x, y) && !filled(x + 1, y); }, colors, true)
+            .forEach(function (r) {
+                var x = r.x, lx = x + 1 - hw;
+                var lz0 = r.y0 - hh, lz1 = r.y1 - hh;
+                var c = rgbOf(colors[r.y0 * w + x]).map(function (q) { return q * SIDE; });
+                quad([[lx, 0, lz0], [lx, 0, lz1], [lx, t, lz1], [lx, t, lz0]], PX,
+                    [[0, 0], [0, 0], [0, 0], [0, 0]], c, 0);
+            });
+
+        // ---- 描边：沿「有豆 ↔ 空格」的每条交界画一段 ----
+        for (var yy = 0; yy < h; yy++) {
+            for (var xx = 0; xx < w; xx++) {
+                if (mask[yy * w + xx] !== 1) continue;
+                var ex = xx - hw, ez = yy - hh;
+                if (!filled(xx, yy - 1)) edge(ex, ez, ex + 1, ez);
+                if (!filled(xx, yy + 1)) edge(ex, ez + 1, ex + 1, ez + 1);
+                if (!filled(xx - 1, yy)) edge(ex, ez, ex, ez + 1);
+                if (!filled(xx + 1, yy)) edge(ex + 1, ez, ex + 1, ez + 1);
+            }
+        }
 
         return {
             data: new Float32Array(v),
-            topCount: topCount,
-            sideCount: v.length / 8 - topCount
+            count: v.length / FLOATS,
+            lines: new Float32Array(lv),
+            lineCount: lv.length / FLOATS
         };
     }
 
-    /** 单位立方体的 12 条棱（选中框用）。pos(3)+normal(3)+uv(2)，跟板同一套顶点布局。 */
+    /** 单位立方体的 12 条棱（选中框 / 空区域轮廓）。跟板同一套顶点布局。 */
     function buildUnitBoxLines() {
         var c = [
             [-.5, -.5, -.5], [.5, -.5, -.5], [.5, -.5, .5], [-.5, -.5, .5],
@@ -269,7 +454,7 @@
         var v = [];
         E.forEach(function (e) {
             [c[e[0]], c[e[1]]].forEach(function (p) {
-                v.push(p[0], p[1], p[2], 0, 1, 0, 0, 0);
+                v.push(p[0], p[1], p[2], 0, 1, 0, 0, 0, 1, 1, 1, 0);
             });
         });
         return v;
@@ -277,7 +462,10 @@
 
     /* ============================== 主体 ============================== */
     function Editor3D(canvas) {
-        var opts = { alpha: true, antialias: true, premultipliedAlpha: false };
+        // preserveDrawingBuffer 必须开：这个视图是按需渲染（静止时不出帧），
+        // 关掉的话浏览器合成完就把缓冲丢了，任何像素级回读（readPixel / 导出 / 测试）
+        // 都会读到一片 0，而且不报错。
+        var opts = { alpha: true, antialias: true, premultipliedAlpha: false, preserveDrawingBuffer: true };
         var gl = canvas.getContext('webgl2', opts) || canvas.getContext('webgl', opts);
         if (!gl) throw new Error('no webgl');
 
@@ -296,24 +484,25 @@
             aPos: gl.getAttribLocation(p, 'aPos'),
             aNormal: gl.getAttribLocation(p, 'aNormal'),
             aUV: gl.getAttribLocation(p, 'aUV'),
+            aColor: gl.getAttribLocation(p, 'aColor'),
+            aTexFlag: gl.getAttribLocation(p, 'aTexFlag'),
             uProj: gl.getUniformLocation(p, 'uProj'),
             uView: gl.getUniformLocation(p, 'uView'),
             uModel: gl.getUniformLocation(p, 'uModel'),
             uNormalMat: gl.getUniformLocation(p, 'uNormalMat'),
             uTex: gl.getUniformLocation(p, 'uTex'),
-            uUseTex: gl.getUniformLocation(p, 'uUseTex'),
+            uHasTex: gl.getUniformLocation(p, 'uHasTex'),
             uColor: gl.getUniformLocation(p, 'uColor'),
             uEye: gl.getUniformLocation(p, 'uEye'),
             uHover: gl.getUniformLocation(p, 'uHover'),
             uFlat: gl.getUniformLocation(p, 'uFlat')
         };
 
-        // 选中框：一个以原点为中心的单位立方体线框，按每块板的尺寸缩放后画在板外层
         this.boxBuf = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, this.boxBuf);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(buildUnitBoxLines()), gl.STATIC_DRAW);
 
-        this.items = new Map();     // id -> { id, w, h, buf, tex, hasTex, local, cx, cz }
+        this.items = new Map();     // id -> { id, w, h, buf, tex, hasTex, local, cx, cz, shape, ... }
         this.hoverId = null;
         this.selectedId = null;
 
@@ -323,6 +512,10 @@
         this.dist = 120;
         this.target = [0, 0, 0];
         this.fov = 34 * Math.PI / 180;
+
+        // 旋转灵敏度：整屏高度拖过去大约转 155°。
+        // 以前是固定 0.008 rad/px（同样一屏转 400°+），这就是「太滑」的主因。
+        this.rotSpan = 2.7;     // 弧度 / 视口高度
 
         this._raf = 0;
         this._last = 0;
@@ -338,34 +531,53 @@
         /* ---------------- 实例管理 ---------------- */
 
         /**
-         * 增/改一块板。w/h 变了会重建几何；传 texture 会重新上传纹理。
+         * 增/改一块板。
          * @param {number} id
-         * @param {{w:number,h:number,cx:number,cz:number,local:object}} info  cx/cz = 2D 世界坐标推出的板心
-         * @param {HTMLCanvasElement} [texture]
+         * @param {{w:number,h:number,cx:number,cz:number,local:object,
+         *          shape:{mask:Uint8Array,colors:Uint32Array,hash:number,filled:number},
+         *          texW:number,texH:number}} info
+         * @param {HTMLCanvasElement} [texture] 传同一个 canvas 对象时不会重复上传
          */
         setInstance(id, info, texture) {
             var gl = this.gl;
             var it = this.items.get(id);
             if (!it) {
-                it = { id: id, w: 0, h: 0, buf: gl.createBuffer(), tex: gl.createTexture(), hasTex: false };
+                it = {
+                    id: id, w: 0, h: 0,
+                    buf: gl.createBuffer(), lineBuf: gl.createBuffer(),
+                    tex: gl.createTexture(), hasTex: false
+                };
                 this.items.set(id, it);
             }
 
-            if (it.w !== info.w || it.h !== info.h) {
-                var g = buildBoard(info.w, info.h);
+            var hash = info.shape ? info.shape.hash : 0;
+            if (it.w !== info.w || it.h !== info.h || it.shapeHash !== hash) {
+                var g = buildBoard(info.w, info.h, info.shape, info.texW, info.texH);
                 gl.bindBuffer(gl.ARRAY_BUFFER, it.buf);
                 gl.bufferData(gl.ARRAY_BUFFER, g.data, gl.STATIC_DRAW);
-                it.topCount = g.topCount;
-                it.sideCount = g.sideCount;
+                gl.bindBuffer(gl.ARRAY_BUFFER, it.lineBuf);
+                gl.bufferData(gl.ARRAY_BUFFER, g.lines, gl.STATIC_DRAW);
+                it.count = g.count;
+                it.lineCount = g.lineCount;
                 it.w = info.w;
                 it.h = info.h;
+                it.shapeHash = hash;
             }
 
             it.cx = info.cx;
             it.cz = info.cz;
+            it.shape = info.shape || null;
             it.local = info.local || { pos: [0, 0, 0], rot: [0, 0, 0], flipX: false };
 
-            if (texture) this._uploadTex(it, texture);
+            // 世界矩阵/逆矩阵在 setInstance 里算好：拾取要拿逆矩阵把射线送进局部空间，
+            // 每次点击再重算一遍纯属浪费
+            it.model = this._modelOf(it);
+            it.inv = mInvert(it.model);
+
+            if (texture && it.texStamp !== texture) {
+                this._uploadTex(it, texture);
+                it.texStamp = texture;
+            }
             this._dirty = true;
             return it;
         },
@@ -374,6 +586,7 @@
             var it = this.items.get(id);
             if (!it) return;
             this.gl.deleteBuffer(it.buf);
+            this.gl.deleteBuffer(it.lineBuf);
             this.gl.deleteTexture(it.tex);
             this.items.delete(id);
             this._dirty = true;
@@ -406,10 +619,36 @@
             it.hasTex = true;
         },
 
+        /** 调试/测试用：一块板的网格规模 */
+        meshStats(id) {
+            var it = this.items.get(id);
+            if (!it) return null;
+            return {
+                w: it.w, h: it.h, verts: it.count || 0, tris: (it.count || 0) / 3,
+                lineCount: it.lineCount || 0, edges: (it.lineCount || 0) / 2,
+                filled: it.shape ? it.shape.filled : 0,
+                hasTex: it.hasTex, shapeHash: it.shapeHash
+            };
+        },
+
+        /** 调试/测试用：读一个 CSS 像素（gl 原点在左下，这里接屏幕坐标） */
+        readPixel(cssX, cssY) {
+            var c = this.canvas, dpr = this.dpr || 1;
+            var px = new Uint8Array(4);
+            var x = Math.round(cssX * dpr);
+            var y = Math.round((c.clientHeight - cssY) * dpr);
+            // 越界/非数时 readPixels 不报错、直接给 0，跟"那里是透明的"分不开 → 明确告诉调用方
+            if (!isFinite(x) || !isFinite(y)) return null;
+            if (x < 0 || y < 0 || x >= c.width || y >= c.height) return null;
+            this.gl.readPixels(x, y, 1, 1, this.gl.RGBA, this.gl.UNSIGNED_BYTE, px);
+            return [px[0], px[1], px[2], px[3]];
+        },
+
         /* ---------------- 相机 ---------------- */
 
         frameAll() {
-            var items = Array.from(this.items.values());
+            var items = Array.from(this.items.values()).filter(it => !it.shape || it.shape.filled > 0);
+            if (!items.length) items = Array.from(this.items.values());
             if (!items.length) {
                 this.target = [0, 0, 0];
                 this.dist = 90;
@@ -456,6 +695,17 @@
 
         /* ---------------- 事件 ---------------- */
 
+        /** 一转一像素多少弧度：按视口高度归一，换屏幕尺寸手感不变 */
+        _rotPerPx() {
+            return this.rotSpan / Math.max(320, this.canvas.clientHeight || 800);
+        },
+
+        /** 目标深度上一像素等于多少世界单位：平移要 1:1 跟手就靠它 */
+        _worldPerPx() {
+            var hPx = Math.max(1, this.canvas.clientHeight || 800);
+            return 2 * this.dist * Math.tan(this.fov / 2) / hPx;
+        },
+
         _bindEvents() {
             var c = this.canvas;
             var self = this;
@@ -486,11 +736,13 @@
                 moved += Math.abs(dx) + Math.abs(dy);
 
                 if (mode === 'orbit') {
-                    self.yaw += dx * 0.008;
+                    // 拖拽量按视口高度归一：小窗口不再"一动就飞"
+                    var k = self._rotPerPx();
+                    self.yaw += dx * k;
                     // 只允许从上方看（0.22 ~ 1.45 弧度）。
                     // 场景就是一堆水平放的板，允许拖到 0 或负数的话，
                     // 板会变成一条看不见的窄边 —— 用户会以为东西没了。
-                    self.pitch = Math.max(0.22, Math.min(1.45, self.pitch + dy * 0.008));
+                    self.pitch = Math.max(0.22, Math.min(1.45, self.pitch + dy * k));
                 } else {
                     self._panBy(dx, dy);
                 }
@@ -516,7 +768,11 @@
 
             c.addEventListener('wheel', e => {
                 e.preventDefault();
-                var k = e.deltaY > 0 ? 1.12 : 1 / 1.12;
+                // 按 delta 指数缩放，并限幅：老版本一档 1.12 倍，
+                // 一格滚轮就跳过半个场景，也是"滑"的一部分
+                var d = e.deltaY * (e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? 100 : 1));
+                var k = Math.pow(1.0016, -d);
+                k = Math.max(0.75, Math.min(1.34, k));
                 self.dist = Math.max(4, Math.min(4000, self.dist * k));
                 self._dirty = true;
             }, { passive: false });
@@ -524,10 +780,11 @@
             c.addEventListener('dblclick', () => self.resetCamera());
         },
 
+        /** 1:1 跟手平移：屏幕移多少像素，铺在目标平面上的内容就跟着移多少像素 */
         _panBy(dx, dy) {
             // 只平移 xz 平面（像拖动一张桌子），不改 target 高度：
             // 允许上下平移的话，用户很容易把场景推出画面还找不回来
-            var k = this.dist * 0.0016;
+            var k = this._worldPerPx();
             var cy = Math.cos(this.yaw), sy = Math.sin(this.yaw);
             // right = (cy, 0, -sy)：屏幕向右的世界方向
             // fwd   = (-sy, 0, -cy)：屏幕上方向在水平面的投影
@@ -547,7 +804,7 @@
 
         /**
          * 世界点 → 屏幕像素（相对 canvas 左上角，CSS px）。
-         * 拾取反算、3D 里摆文字标签都要用；测试也靠它算点击位置。
+         * 是 _ray 的反向：拾取算错时先拿它跟 _ray 对一遍，能立刻看出是投影还是求交的问题。
          */
         project(p) {
             var c = this.canvas;
@@ -568,12 +825,8 @@
             };
         },
 
-        /**
-         * 把屏幕点投成射线，跟每块板的顶面（y=THICK）求交，取最近命中的那块。
-         * @param {boolean} [silent] 只返回命中 id，不改选中态、不触发回调（悬停用）
-         */
-        _pickAt(clientX, clientY, silent) {
-            if (!this.onPick && !silent) return null;
+        /** 屏幕坐标 → 世界射线 {o, d}。拾取用，测试也算它。 */
+        _ray(clientX, clientY) {
             var r = this.canvas.getBoundingClientRect();
             var nx = ((clientX - r.left) / r.width) * 2 - 1;
             var ny = 1 - ((clientY - r.top) / r.height) * 2;
@@ -602,38 +855,66 @@
 
             var aspect = (this.canvas.width || 1) / (this.canvas.height || 1);
             var th = Math.tan(this.fov / 2);
-            var dir = [
-                fx + rx * nx * th * aspect + ux * ny * th,
-                fy + 0 * nx * th * aspect + uy * ny * th,
-                fz + rz * nx * th * aspect + uz * ny * th
-            ];
+            return {
+                o: eye,
+                d: [
+                    fx + rx * nx * th * aspect + ux * ny * th,
+                    fy + 0 * nx * th * aspect + uy * ny * th,
+                    fz + rz * nx * th * aspect + uz * ny * th
+                ]
+            };
+        },
+
+        /**
+         * 把屏幕点投成射线，跟每块板做射线-OBB 求交，取最近命中的那块。
+         * 命中后再按格子掩码判一次：不规则配件的空位是点不中的（那里没有实体）。
+         * @param {boolean} [silent] 只返回命中 id，不改选中态、不触发回调（悬停用）
+         */
+        _pickAt(clientX, clientY, silent) {
+            if (!this.onPick && !silent) return null;
+            var ray = this._ray(clientX, clientY);
+            var eye = ray.o, dir = ray.d;
 
             var best = null, bestT = Infinity;
             this.items.forEach(function (it) {
-                var p = it.local && it.local.pos ? it.local.pos : [0, 0, 0];
-                var cx = it.cx + p[0], cz = it.cz + p[2];
-                var planeY = THICK + p[1];
-                if (Math.abs(dir[1]) < 1e-6) return;
-                var t = (planeY - eye[1]) / dir[1];
-                if (t <= 0 || t >= bestT) return;
-                var hx = eye[0] + dir[0] * t - cx;
-                var hz = eye[2] + dir[2] * t - cz;
-                // 只对绕 Y 做逆旋转。拾取是按「顶面」近似求交的，X/Z 那点倾角
-                // 带来的偏差在一格以内，不值得为它引一套完整的射线-OBB 求交。
-                var rot = (it.local && it.local.rot) || [0, 0, 0];
-                var cc = Math.cos(-(rot[1] || 0)), ss = Math.sin(-(rot[1] || 0));
-                var qx = hx * cc + hz * ss;
-                var qz = -hx * ss + hz * cc;
-                if (it.local && it.local.flipX) qx = -qx;
-                if (Math.abs(qx) <= it.w / 2 && Math.abs(qz) <= it.h / 2) {
-                    bestT = t;
-                    best = it.id;
+                var o = xformPoint(it.inv, eye);
+                var d = xformDir(it.inv, dir);
+
+                // 局部包围盒：[±w/2] × [0,THICK] × [±h/2]
+                var lo = [-it.w / 2, 0, -it.h / 2];
+                var hi = [it.w / 2, THICK, it.h / 2];
+                var t0 = 0, t1 = Infinity;
+                for (var a = 0; a < 3; a++) {
+                    if (Math.abs(d[a]) < 1e-9) {
+                        if (o[a] < lo[a] || o[a] > hi[a]) return;
+                        continue;
+                    }
+                    var ta = (lo[a] - o[a]) / d[a];
+                    var tb = (hi[a] - o[a]) / d[a];
+                    if (ta > tb) { var tmp = ta; ta = tb; tb = tmp; }
+                    if (ta > t0) t0 = ta;
+                    if (tb < t1) t1 = tb;
+                    if (t0 > t1) return;
                 }
+                if (t0 <= 0 || t0 >= bestT) return;
+
+                // 命中点 → 格子 → 有没有豆
+                var hx = o[0] + d[0] * t0;
+                var hz = o[2] + d[2] * t0;
+                var gx = Math.floor(hx + it.w / 2);
+                var gy = Math.floor(hz + it.h / 2);
+                var mask = it.shape && it.shape.mask;
+                if (mask && it.shape.filled > 0) {
+                    if (gx < 0 || gx >= it.w || gy < 0 || gy >= it.h) return;
+                    if (!mask[gy * it.w + gx]) return;      // 空位 = 没有实体，点不中
+                }
+                bestT = t0;
+                best = it.id;
             });
 
             if (silent) return best;
             this.selectedId = best;
-            this.onPick(best);
+            if (this.onPick) this.onPick(best);
             this._dirty = true;
             return best;
         },
@@ -686,6 +967,21 @@
             gl.deleteProgram(this.prog);
         },
 
+        _bindAttribs(buf) {
+            var gl = this.gl, L = this.loc;
+            gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+            gl.enableVertexAttribArray(L.aPos);
+            gl.vertexAttribPointer(L.aPos, 3, gl.FLOAT, false, STRIDE, 0);
+            gl.enableVertexAttribArray(L.aNormal);
+            gl.vertexAttribPointer(L.aNormal, 3, gl.FLOAT, false, STRIDE, 12);
+            gl.enableVertexAttribArray(L.aUV);
+            gl.vertexAttribPointer(L.aUV, 2, gl.FLOAT, false, STRIDE, 24);
+            gl.enableVertexAttribArray(L.aColor);
+            gl.vertexAttribPointer(L.aColor, 3, gl.FLOAT, false, STRIDE, 32);
+            gl.enableVertexAttribArray(L.aTexFlag);
+            gl.vertexAttribPointer(L.aTexFlag, 1, gl.FLOAT, false, STRIDE, 44);
+        },
+
         render() {
             var gl = this.gl;
             var c = this.canvas;
@@ -693,6 +989,8 @@
             this.resize();
 
             gl.viewport(0, 0, c.width, c.height);
+            // 清成全透明：3D 里没有「纸张」，背景就是页面本身。
+            // 空位也不生成几何，所以主体外轮廓就是图形本身的形状。
             gl.clearColor(0, 0, 0, 0);
             gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
             gl.enable(gl.DEPTH_TEST);
@@ -715,71 +1013,110 @@
 
             var self = this;
             gl.uniform1f(L.uFlat, 0.0);
+            gl.uniform3f(L.uColor, 1, 1, 1);
 
             this.items.forEach(function (it) {
-                var model = self._modelOf(it);
+                var model = it.model || self._modelOf(it);
                 gl.uniformMatrix4fv(L.uModel, false, model);
-                gl.uniformMatrix3fv(L.uNormalMat, false, normalMat(model, !!(it.local && it.local.flipX)));
+                // model 只有旋转 + 单位镜像，法线直接用左上 3×3（即 R·S）就是对的
+                var nm = new Float32Array([
+                    model[0], model[1], model[2],
+                    model[4], model[5], model[6],
+                    model[8], model[9], model[10]
+                ]);
+                gl.uniformMatrix3fv(L.uNormalMat, false, nm);
 
-                var hover = (it.id === self.selectedId) ? 1.0 :
-                    (it.id === self.hoverId ? 0.45 : 0.0);
+                var hover = (it.id === self.selectedId) ? 0.34 :
+                    (it.id === self.hoverId ? 0.18 : 0.0);
                 gl.uniform1f(L.uHover, hover);
+                gl.uniform1f(L.uHasTex, it.hasTex ? 1 : 0);
 
-                gl.bindBuffer(gl.ARRAY_BUFFER, it.buf);
-                gl.enableVertexAttribArray(L.aPos);
-                gl.vertexAttribPointer(L.aPos, 3, gl.FLOAT, false, 32, 0);
-                gl.enableVertexAttribArray(L.aNormal);
-                gl.vertexAttribPointer(L.aNormal, 3, gl.FLOAT, false, 32, 12);
-                gl.enableVertexAttribArray(L.aUV);
-                gl.vertexAttribPointer(L.aUV, 2, gl.FLOAT, false, 32, 24);
-
-                // 顶面：贴图
+                self._bindAttribs(it.buf);
                 gl.bindTexture(gl.TEXTURE_2D, it.tex);
-                gl.uniform1f(L.uUseTex, it.hasTex ? 1 : 0);
-                gl.uniform3f(L.uColor, 0.93, 0.93, 0.95);
-                gl.drawArrays(gl.TRIANGLES, 0, it.topCount);
-
-                // 侧面：纯色（板边），比顶面暗一档，看得出厚度
-                gl.uniform1f(L.uUseTex, 0.0);
-                gl.uniform3f(L.uColor, 0.78, 0.79, 0.83);
-                gl.drawArrays(gl.TRIANGLES, it.topCount, it.sideCount);
+                if (it.count) gl.drawArrays(gl.TRIANGLES, 0, it.count);
             });
 
-            // ---- 选中框 ----
-            // 只靠给板加一点自发光根本看不出来（尤其白底图纸）。
-            // 画一圈比板略大的洋红线框，选中哪块一眼就认得。
+            // ---- 空区域：只剩一圈虚框 ----
+            // 全空的区域按「空位不生成几何」就没有任何东西了，用户会以为区域丢了；
+            // 用很淡的轮廓标出它还在，也不影响别的板。
+            var boxColor = [0.62, 0.64, 0.70];
+            this.items.forEach(function (it) {
+                if (it.shape && it.shape.filled === 0) {
+                    self._drawBox(it, boxColor, 1.0);
+                }
+            });
+
+            // ---- 选中：贴着形状描一圈紫边 ----
+            // 只靠给板加一点自发光根本看不出来（尤其白底图纸），
+            // 套外接矩形又会把不规则配件的框套得老大 —— 所以沿掩码描边。
             if (this.selectedId !== null) {
                 var sit = this.items.get(this.selectedId);
-                if (sit) {
-                    // 放大 1.6% + 抬高 0.02：跟板面共面会 z-fighting，边线一闪一闪的
-                    var boxModel = mul(this._modelOf(sit), mScale(sit.w * 1.016, THICK * 1.6 + 0.6, sit.h * 1.016));
-                    boxModel = mul(boxModel, mTranslate(0, 0.5, 0));
-                    gl.uniformMatrix4fv(L.uModel, false, boxModel);
-                    gl.uniformMatrix3fv(L.uNormalMat, false, normalMat(boxModel, false));
-                    gl.uniform1f(L.uHover, 0.0);
-                    gl.uniform1f(L.uUseTex, 0.0);
-                    gl.uniform1f(L.uFlat, 1.0);
-                    gl.uniform3f(L.uColor, 0.42, 0.30, 0.95);
-
-                    gl.bindBuffer(gl.ARRAY_BUFFER, this.boxBuf);
-                    gl.vertexAttribPointer(L.aPos, 3, gl.FLOAT, false, 32, 0);
-                    gl.vertexAttribPointer(L.aNormal, 3, gl.FLOAT, false, 32, 12);
-                    gl.vertexAttribPointer(L.aUV, 2, gl.FLOAT, false, 32, 24);
-                    // 线框不该被板自己挡住后面那几条棱 → 关掉深度测试反而更像"套框"
-                    gl.disable(gl.DEPTH_TEST);
-                    gl.drawArrays(gl.LINES, 0, 24);
-                    gl.enable(gl.DEPTH_TEST);
-                }
+                if (sit) self._drawSelect(sit);
             }
 
             this._dirty = false;
         },
 
+        /** 选中：沿形状交界描一圈（贴顶面略抬高，正常吃深度遮挡） */
+        _drawSelect(it) {
+            var gl = this.gl, L = this.loc;
+            if (!it.lineCount) {                  // 空区域没有形状，退回外框
+                this._drawBox(it, [0.42, 0.30, 0.95], 1.6);
+                return;
+            }
+            var model = it.model || this._modelOf(it);
+            gl.uniformMatrix4fv(L.uModel, false, model);
+            gl.uniformMatrix3fv(L.uNormalMat, false, new Float32Array([
+                model[0], model[1], model[2],
+                model[4], model[5], model[6],
+                model[8], model[9], model[10]
+            ]));
+            gl.uniform1f(L.uHover, 0.0);
+            gl.uniform1f(L.uHasTex, 0.0);
+            gl.uniform1f(L.uFlat, 1.0);
+            gl.uniform3f(L.uColor, 0.42, 0.30, 0.95);
+
+            this._bindAttribs(it.lineBuf);
+            // 这条线在顶面之上 0.03，开深度测试 → 远处的板能把它正常挡住，
+            // 不会像外框那样"透视"到后面去
+            gl.drawArrays(gl.LINES, 0, it.lineCount);
+
+            gl.uniform1f(L.uFlat, 0.0);
+            gl.uniform3f(L.uColor, 1, 1, 1);
+        },
+
+        /** 在板上套一圈线框。grow=1 贴着板，1.6 是选中框（抬高一点避免 z-fighting） */
+        _drawBox(it, color, grow) {
+            var gl = this.gl, L = this.loc;
+            var model = it.model || this._modelOf(it);
+            // 放大一点 + 抬高：跟板面共面会 z-fighting，边线一闪一闪的
+            var boxModel = mul(model, mScale(it.w * 1.016, THICK * grow + 0.6, it.h * 1.016));
+            boxModel = mul(boxModel, mTranslate(0, 0.5, 0));
+            gl.uniformMatrix4fv(L.uModel, false, boxModel);
+            gl.uniformMatrix3fv(L.uNormalMat, false, new Float32Array([
+                boxModel[0], boxModel[1], boxModel[2],
+                boxModel[4], boxModel[5], boxModel[6],
+                boxModel[8], boxModel[9], boxModel[10]
+            ]));
+            gl.uniform1f(L.uHover, 0.0);
+            gl.uniform1f(L.uHasTex, 0.0);
+            gl.uniform1f(L.uFlat, 1.0);
+            gl.uniform3f(L.uColor, color[0], color[1], color[2]);
+
+            this._bindAttribs(this.boxBuf);
+            // 线框不该被板自己挡住后面那几条棱 → 关掉深度测试反而更像"套框"
+            gl.disable(gl.DEPTH_TEST);
+            gl.drawArrays(gl.LINES, 0, 24);
+            gl.enable(gl.DEPTH_TEST);
+            gl.uniform1f(L.uFlat, 0.0);
+            gl.uniform3f(L.uColor, 1, 1, 1);
+        },
+
         /** 实例的世界矩阵：T(2D 位置 + local 偏移) · Ry · Rx · Rz · 镜像 */
         _modelOf(it) {
-            var p = it.local && it.local.pos ? it.local.pos : [0, 0, 0];
+            var p = (it.local && it.local.pos) || [0, 0, 0];
             var rot = (it.local && it.local.rot) || [0, 0, 0];
-            var model = mTranslate(it.cx + p[0], p[1], it.cz + p[2]);
+            var model = mTranslate(it.cx + (p[0] || 0), p[1] || 0, it.cz + (p[2] || 0));
             model = mul(model, mRotY(rot[1] || 0));
             model = mul(model, mRotX(rot[0] || 0));
             model = mul(model, mRotZ(rot[2] || 0));
@@ -790,5 +1127,6 @@
 
     Editor3D.THICK = THICK;
     Editor3D.MAX_TEX = MAX_TEX;
+    Editor3D.FLOATS = FLOATS;
     window.Editor3D = Editor3D;
 })();

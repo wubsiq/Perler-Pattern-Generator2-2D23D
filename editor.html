@@ -122,9 +122,8 @@
 
             <!-- 3D 视图的两条浮层：操作提示 / 选中信息 -->
             <div class="ed-3d-hint">
-                <span>点击选中</span><i>·</i><span>拖动旋转</span><i>·</i><span>滚轮缩放</span><i>·</i><span>右键平移</span><i>·</i><span>双击复位</span>
-            </div>
-            <div class="ed-3d-pick" id="pick3d"></div>
+                <span>点击选中</span><i>·</i><span>拖动旋转</span><i>·</i><span>滚轮缩放</span><i>·</i><span>右键 / Shift 平移</span><i>·</i><span>双击复位</span>
+            </div>            <div class="ed-3d-pick" id="pick3d"></div>
         </div>
 
         <!-- 次面板（右侧）：默认图纸统计，选中工具时变成该工具属性 -->
@@ -569,6 +568,51 @@
             <!-- 收起态：只留一条色块，按用量从多到少 -->
             <div class="insp-strip" id="inspStrip" hidden>
                 <div class="strip-list" id="stripList"></div>
+            </div>
+        </aside>
+
+        <!-- 3D 实例面板（右侧）：上面是实例列表，选中后在下面调 XYZ / 旋转。
+             只在 3D 模式出现，替掉右侧的「图纸统计」——那个统计的是 2D 的当前区域，
+             在 3D 里既对不上号、也没有"当前区域"这个概念。 -->
+        <aside class="ed-3dpanel" id="instPanel">
+            <header class="inst-head">
+                <span class="inst-title">实例</span>
+                <span class="inst-badge" id="instCount">0</span>
+                <button class="inst-icon" id="instFrame" type="button" title="适应全部（把所有板框进画面）">适应</button>
+            </header>
+
+            <div class="inst-list" id="instList"></div>
+
+            <div class="inst-body" id="instBody">
+                <p class="inst-empty" id="instEmpty">点画面里的一块板，或者从上面列表挑一个</p>
+
+                <div class="inst-fields" id="instFields" hidden>
+                    <div class="inst-who" id="instWho">—</div>
+
+                    <div class="inst-sec"><span>位置</span><em>格</em></div>
+                    <div class="inst-trio">
+                        <label class="inst-axis a-x"><i>X</i><input class="inst-num" id="instPosX" type="number" step="1"></label>
+                        <label class="inst-axis a-y"><i>Y</i><input class="inst-num" id="instPosY" type="number" step="1"></label>
+                        <label class="inst-axis a-z"><i>Z</i><input class="inst-num" id="instPosZ" type="number" step="1"></label>
+                    </div>
+
+                    <div class="inst-sec"><span>旋转</span><em>度</em></div>
+                    <div class="inst-trio">
+                        <label class="inst-axis a-x"><i>X</i><input class="inst-num" id="instRotX" type="number" step="15"></label>
+                        <label class="inst-axis a-y"><i>Y</i><input class="inst-num" id="instRotY" type="number" step="15"></label>
+                        <label class="inst-axis a-z"><i>Z</i><input class="inst-num" id="instRotZ" type="number" step="15"></label>
+                    </div>
+
+                    <div class="inst-acts">
+                        <label class="inst-check"><input type="checkbox" id="instFlip"> 水平镜像</label>
+                    </div>
+                    <div class="inst-btns">
+                        <button class="inst-btn" id="instFocus" type="button">聚焦</button>
+                        <button class="inst-btn" id="instReset" type="button">复位</button>
+                    </div>
+
+                    <p class="inst-tip">改的是这块板在 3D 里的摆位，不影响 2D 图纸。</p>
+                </div>
             </div>
         </aside>
 
